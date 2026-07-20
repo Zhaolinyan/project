@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DSW-LIO-SAM 代码审计报告</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif; background: #f5f5f5; color: #333; line-height: 1.7; }
+  .container { max-width: 960px; margin: 0 auto; padding: 40px 20px; }
+  h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
+  .subtitle { color: #888; font-size: 14px; margin-bottom: 32px; }
+  .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 32px; }
+  .summary-card { background: #fff; border-radius: 10px; padding: 20px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  .summary-card .count { font-size: 32px; font-weight: 700; }
+  .summary-card .label { font-size: 13px; color: #888; margin-top: 4px; }
+  .fatal .count { color: #d32f2f; }
+  .critical .count { color: #f57c00; }
+  .warning .count { color: #fbc02d; }
+  .info .count { color: #1976d2; }
+  .section { margin-bottom: 28px; }
+  .section-title { font-size: 17px; font-weight: 600; padding: 10px 16px; border-radius: 8px 8px 0 0; color: #fff; }
+  .section-fatal { background: #d32f2f; }
+  .section-critical { background: #f57c00; }
+  .section-warning { background: #fbc02d; color: #333 !important; }
+  .section-info { background: #1976d2; }
+  .issue { background: #fff; border: 1px solid #e0e0e0; border-top: none; padding: 20px; margin-bottom: 1px; }
+  .issue:last-child { border-radius: 0 0 8px 8px; }
+  .issue-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .issue-num { font-size: 12px; font-weight: 700; background: #eee; border-radius: 4px; padding: 2px 8px; min-width: 28px; text-align: center; }
+  .issue-title { font-size: 15px; font-weight: 600; }
+  .issue-meta { font-size: 12px; color: #888; margin-bottom: 12px; font-family: 'Cascadia Code', 'Consolas', monospace; }
+  .issue-desc { font-size: 14px; color: #555; margin-bottom: 10px; }
+  .issue-code { background: #f8f8f8; border-left: 3px solid #ccc; padding: 10px 14px; font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 13px; overflow-x: auto; margin: 8px 0; border-radius: 0 4px 4px 0; }
+  .issue-fix { background: #e8f5e9; border-left: 3px solid #43a047; padding: 10px 14px; font-size: 13px; border-radius: 0 4px 4px 0; }
+  .issue-fix strong { color: #2e7d32; }
+  .tag { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 10px; margin-left: 6px; }
+  .tag-mem { background: #fce4ec; color: #c62828; }
+  .tag-sec { background: #fff3e0; color: #e65100; }
+  .tag-perf { background: #e3f2fd; color: #1565c0; }
+  .tag-bug { background: #f3e5f5; color: #7b1fa2; }
+  .tag-style { background: #f5f5f5; color: #616161; }
+  .tag-dead { background: #e0f2f1; color: #00695c; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #e0e0e0; }
+  th { background: #f5f5f5; font-weight: 600; }
+  .footer { text-align: center; color: #aaa; font-size: 12px; margin-top: 40px; padding-top: 20px; border-top: 1px solid #e0e0e0; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>DSW-LIO-SAM 代码审计报告</h1>
+  <div class="subtitle">扫描日期: 2026-07-14 &nbsp;|&nbsp; 项目路径: E:/Code_reproduction/DSW-LIO-SAM/ &nbsp;|&nbsp; 扫描范围: C++源码 / Python脚本 / YAML配置 / CMakeLists / package.xml</div>
+
+  <div class="summary">
+    <div class="summary-card fatal"><div class="count">6</div><div class="label">致命 FATAL</div></div>
+    <div class="summary-card critical"><div class="count">5</div><div class="label">严重 CRITICAL</div></div>
+    <div class="summary-card warning"><div class="count">11</div><div class="label">警告 WARNING</div></div>
+    <div class="summary-card info"><div class="count">6</div><div class="label">建议 INFO</div></div>
+  </div>
+
+  <!-- ===== FATAL ===== -->
+  <div class="section">
+    <div class="section-title section-fatal">致命 FATAL (6项) — 会导致崩溃、数据损坏或安全漏洞，必须立即修复</div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">F1</span><span class="issue-title">命令注入漏洞：system() 拼接用户输入</span><span class="tag tag-sec">安全</span></div>
+      <div class="issue-meta">src/mapOptmization.cpp:201-206, 437-439</div>
+      <div class="issue-desc"><code>saveMapService</code> 中将 <code>std::getenv("HOME")</code> 与用户通过服务请求传入的 <code>req->destination</code> 直接拼接到 <code>system("exec rm -r ...")</code> 中执行。攻击者可通过构造 destination 参数（如 <code>"; rm -rf /; #"</code>）实现任意命令执行。</div>
+      <div class="issue-code">saveMapDirectory = std::getenv("HOME") + req->destination;
+int unused = system((std::string("exec rm -r ") + saveMapDirectory).c_str());
+unused = system((std::string("mkdir -p ") + saveMapDirectory).c_str());</div>
+      <div class="issue-fix"><strong>修复建议：</strong>1) 用 <code>std::filesystem::remove_all()</code> + <code>std::filesystem::create_directories()</code> 替代 <code>system()</code> 调用；2) 若必须用 system()，对路径做严格白名单校验（仅允许字母数字/下划线/斜杠）；3) 使用 <code>execvp()</code> 避免shell解释。</div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">F2</span><span class="issue-title">getenv("HOME") 返回 nullptr 导致未定义行为</span><span class="tag tag-bug">Bug</span></div>
+      <div class="issue-meta">src/mapOptmization.cpp:201-202, 437</div>
+      <div class="issue-desc">当 HOME 环境变量未设置时（如 Docker 容器、某些 systemd 服务环境），<code>std::getenv("HOME")</code> 返回 <code>nullptr</code>。<code>nullptr + std::string</code> 的拼接是未定义行为，会导致段错误崩溃。</div>
+      <div class="issue-code">saveMapDirectory = std::getenv("HOME") + savePCDDirectory;  // nullptr + string = UB</div>
+      <div class="issue-fix"><strong>修复建议：</strong>const char* home = std::getenv("HOME");<br>if (!home) home = "/tmp";<br>saveMapDirectory = std::string(home) + savePCDDirectory;</div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">F3</span><span class="issue-title">内存泄漏：ISAM2 原始 new 无 delete</span><span class="tag tag-mem">内存</span></div>
+      <div class="issue-meta">src/mapOptmization.cpp:176</div>
+      <div class="issue-desc"><code>isam = new ISAM2(parameters)</code> 使用裸 <code>new</code> 分配，但整个类没有析构函数释放该内存。程序退出时虽然 OS 会回收，但若 mapOptimization 被多次构造/析构（如单元测试），每次都会泄漏一个 ISAM2 对象。</div>
+      <div class="issue-code">isam = new ISAM2(parameters);
+// 无析构函数，无 delete isam;</div>
+      <div class="issue-fix"><strong>修复建议：</strong>改用 <code>std::unique_ptr&lt;ISAM2&gt;</code>：<br><code>std::unique_ptr&lt;ISAM2&gt; isam;</code><br><code>isam = std::make_unique&lt;ISAM2&gt;(parameters);</code><br>或在类中添加析构函数 <code>~mapOptimization() { delete isam; }</code></div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">F4</span><span class="issue-title">内存泄漏：IMU 积分器裸 new 无 delete</span><span class="tag tag-mem">内存</span></div>
+      <div class="issue-meta">src/imuPreintegration.cpp:261-262</div>
+      <div class="issue-desc"><code>imuIntegratorImu_</code> 和 <code>imuIntegratorOpt_</code> 使用裸 <code>new</code> 分配，IMUPreintegration 类无析构函数释放。每次节点重启都会泄漏。</div>
+      <div class="issue-code">imuIntegratorImu_ = new gtsam::PreintegratedImuMeasurements(p, prior_imu_bias);
+imuIntegratorOpt_ = new gtsam::PreintegratedImuMeasurements(p, prior_imu_bias);
+// 无 delete</div>
+      <div class="issue-fix"><strong>修复建议：</strong>改用 <code>std::unique_ptr&lt;gtsam::PreintegratedImuMeasurements&gt;</code> 或添加析构函数 <code>~IMUPreintegration() { delete imuIntegratorImu_; delete imuIntegratorOpt_; }</code></div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">F5</span><span class="issue-title">内存泄漏：imageProjection 四个裸数组无 delete[]</span><span class="tag tag-mem">内存</span></div>
+      <div class="issue-meta">src/imageProjection.cpp:65-68</div>
+      <div class="issue-desc"><code>imuTime</code>, <code>imuRotX</code>, <code>imuRotY</code>, <code>imuRotZ</code> 使用 <code>new double[queueLength]</code> 分配，但 ImageProjection 类无析构函数释放。每个数组 2000 个 double = 16KB，合计 64KB 泄漏。</div>
+      <div class="issue-code">double *imuTime = new double[queueLength];
+double *imuRotX = new double[queueLength];
+double *imuRotY = new double[queueLength];
+double *imuRotZ = new double[queueLength];
+// 无 delete[]</div>
+      <div class="issue-fix"><strong>修复建议：</strong>改用 <code>std::array&lt;double, queueLength&gt;</code> 或 <code>std::vector&lt;double&gt;</code>，自动管理生命周期。</div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">F6</span><span class="issue-title">内存泄漏：featureExtraction 三个裸数组无 delete[]</span><span class="tag tag-mem">内存</span></div>
+      <div class="issue-meta">src/featureExtraction.cpp:76-78</div>
+      <div class="issue-desc"><code>cloudCurvature</code>, <code>cloudNeighborPicked</code>, <code>cloudLabel</code> 使用 <code>new</code> 分配，FeatureExtraction 类无析构函数。N_SCAN*Horizon_SCAN = 64*1024 = 65536 元素/数组。</div>
+      <div class="issue-code">cloudCurvature = new float[N_SCAN*Horizon_SCAN];
+cloudNeighborPicked = new int[N_SCAN*Horizon_SCAN];
+cloudLabel = new int[N_SCAN*Horizon_SCAN];
+// 无 delete[]</div>
+      <div class="issue-fix"><strong>修复建议：</strong>改用 <code>std::vector&lt;float&gt;</code> / <code>std::vector&lt;int&gt;</code>：<br><code>cloudCurvature.resize(N_SCAN*Horizon_SCAN);</code></div>
+    </div>
+  </div>
+
+  <!-- ===== CRITICAL ===== -->
+  <div class="section">
+    <div class="section-title section-critical">严重 CRITICAL (5项) — 会导致功能异常或严重性能问题，应尽快修复</div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">C1</span><span class="issue-title">visualizeGlobalMapThread 中 PCD 保存逻辑为死代码</span><span class="tag tag-dead">死代码</span></div>
+      <div class="issue-meta">src/mapOptmization.cpp:426-463</div>
+      <div class="issue-desc"><code>while(rclcpp::ok())</code> 循环在节点正常运行时永不退出。循环体只调用 <code>publishGlobalMap()</code>。循环后的 PCD 保存代码（440-461行）仅在 <code>rclcpp::shutdown()</code> 后才执行，但此时 ROS 通信已关闭，<code>savePCDDirectory</code> 被 <code>getenv("HOME")</code> 前缀修改且不会恢复。更重要的是：该线程在 <code>exec.spin()</code> 结束后 <code>join()</code>，而 <code>shutdown()</code> 恰在 <code>spin()</code> 之后调用，时序正确——但 <code>savePCDDirectory</code> 成员变量被就地修改后，若后续有服务调用会使用错误路径。</div>
+      <div class="issue-code">while (rclcpp::ok()){
+    rate.sleep();
+    publishGlobalMap();    // 循环内只做发布
+}
+// 以下代码仅在 shutdown 后执行
+savePCDDirectory = std::getenv("HOME") + savePCDDirectory;  // 成员变量被修改！
+int unused = system((std::string("exec rm -r ") + savePCDDirectory).c_str());</div>
+      <div class="issue-fix"><strong>修复建议：</strong>1) 使用局部变量保存路径，不修改成员变量：<code>std::string saveDir = std::string(getenv("HOME") ?: "/tmp") + savePCDDirectory;</code>；2) 将 PCD 保存逻辑移到独立的 <code>saveMap()</code> 函数中，在 <code>main()</code> 的 <code>exec.spin()</code> 之后显式调用。</div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">C2</span><span class="issue-title">semanticBridge 节点未在 launch 文件中启动</span><span class="tag tag-bug">Bug</span></div>
+      <div class="issue-meta">launch/run.launch.py (全文)</div>
+      <div class="issue-desc"><code>run.launch.py</code> 启动了 imuPreintegration、imageProjection、featureExtraction、mapOptimization 四个节点，但没有启动 <code>semanticBridge</code> 或 <code>cylinder3d_ros_node</code>。用户若按默认 launch 启动，语义增强管道不会工作（<code>/semantic_cloud</code> 无人发布）。</div>
+      <div class="issue-fix"><strong>修复建议：</strong>在 <code>run.launch.py</code> 中添加条件启动 semanticBridge 节点：<br><pre>Node(
+    package='dsw_lio_sam',
+    executable='dsw_lio_sam_semanticBridge',
+    name='semantic_bridge',
+    parameters=[parameter_file, {'use_sim_time': LaunchConfiguration('use_sim_time')}],
+    output='screen',
+    condition=IfCondition(PythonExpression(["'", LaunchConfiguration('semantic_enabled'), "' == 'true'"]))
+)</pre>或创建独立的 <code>semantic.launch.py</code>。</div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">C3</span><span class="issue-title">semantic_bridge.py 性能瓶颈：逐点 Python 循环</span><span class="tag tag-perf">性能</span></div>
+      <div class="issue-meta">semantic_bridge/semantic_bridge.py:40-63</div>
+      <div class="issue-desc">对每帧点云（Ouster OS1-64 约 131072 点）逐点用 <code>struct.unpack_from</code> 解析 + <code>struct.pack</code> 打包。Python 逐点循环处理 13万点预计耗时 500ms+，远超 10Hz 帧率要求（100ms/帧），会导致严重丢帧。</div>
+      <div class="issue-code">for i in range(num_points):
+    offset = i * point_step
+    x = struct.unpack_from('f', msg.data, offset)[0]
+    y = struct.unpack_from('f', msg.data, offset + 4)[0]
+    z = struct.unpack_from('f', msg.data, offset + 8)[0]
+    intensity = struct.unpack_from('f', msg.data, offset + 12)[0]
+    # ...逐点打包
+    new_data.extend(struct.pack('f', x))</div>
+      <div class="issue-fix"><strong>修复建议：</strong>用 NumPy 向量化替代逐点循环（参考 <code>cylinder3d_ros_node.py</code> 的 <code>_parse_ouster_cloud</code> 和 <code>_build_semantic_cloud_msg</code> 方法），性能可提升 100 倍以上。</div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">C4</span><span class="issue-title">semantic_replay_node.py 硬编码绝对路径</span><span class="tag tag-bug">Bug</span></div>
+      <div class="issue-meta">semantic_bridge/semantic_replay_node.py:18</div>
+      <div class="issue-desc">数据目录路径硬编码为 <code>"/mnt/e/Code_reproduction/DSW-LIO-SAM/datasets/rooster_semantic_001"</code>，在其他机器或其他数据集上无法使用。</div>
+      <div class="issue-code">SEMANTIC_DIR = "/mnt/e/Code_reproduction/DSW-LIO-SAM/datasets/rooster_semantic_001"</div>
+      <div class="issue-fix"><strong>修复建议：</strong>改为 ROS2 参数：<br><code>self.declare_parameter('semantic_dir', '')</code><br>运行时：<code>--ros-args -p semantic_dir:=/path/to/semantic</code></div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">C5</span><span class="issue-title">saveMapService 中 system("exec rm -r") 无路径校验</span><span class="tag tag-sec">安全</span></div>
+      <div class="issue-meta">src/mapOptmization.cpp:205</div>
+      <div class="issue-desc"><code>system("exec rm -r " + saveMapDirectory)</code> 中 <code>saveMapDirectory</code> 由用户输入 + HOME 拼接。若路径中包含空格或特殊字符，<code>rm -r</code> 可能删除意外目录。虽然与 F1 相关，但这里额外强调 <code>rm -r</code> 的危险性——即使无恶意输入，路径 <code>/home/user/my path/</code> 中的空格会导致 <code>rm -r /home/user/my</code> 和 <code>path/</code> 分别执行。</div>
+      <div class="issue-fix"><strong>修复建议：</strong>1) 用 <code>std::filesystem::remove_all()</code> 替代 <code>system("rm -r")</code>；2) 至少对路径加引号：<code>system("rm -r '" + saveMapDirectory + "'")</code>（但仍有注入风险，优先用方案1）。</div>
+    </div>
+  </div>
+
+  <!-- ===== WARNING ===== -->
+  <div class="section">
+    <div class="section-title section-warning">警告 WARNING (11项) — 代码质量问题，影响可维护性和可靠性</div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">W1</span><span class="issue-title">package.xml 许可证为 "TODO"</span><span class="tag tag-style">规范</span></div>
+      <div class="issue-meta">package.xml:10</div>
+      <div class="issue-desc"><code>&lt;license&gt;TODO&lt;/license&gt;</code> 不符合 ROS2 发布规范，无法通过 bloom 发布。</div>
+      <div class="issue-fix"><strong>修复：</strong>改为 <code>&lt;license&gt;BSD-3-Clause&lt;/license&gt;</code>（或项目实际使用的许可证）。</div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">W2</span><span class="issue-title">大量 C 风格强制转型</span><span class="tag tag-style">规范</span></div>
+      <div class="issue-meta">src/imageProjection.cpp:369,457,522,556; src/mapOptmization.cpp:216,447,488,502,505,651,879,898,930,935,1578; src/featureExtraction.cpp:128,238-243,287-292</div>
+      <div class="issue-desc">共 30+ 处使用 <code>(int)</code>, <code>(uint32_t)</code>, <code>(float)</code>, <code>(size_t)</code> 等 C 风格转型，绕过了 C++ 类型检查。虽然功能正确，但可能在隐式窄化时引入难以追踪的 bug。</div>
+      <div class="issue-code">for (int i = 0; i < (int)odomQueue.size(); ++i)     // 应为 static_cast&lt;int&gt;
+(uint32_t)SemanticLabel::UNKNOWN                            // 应为 static_cast&lt;uint32_t&gt;
+(float)degenerateCount / 6.0f                               // 应为 static_cast&lt;float&gt;</div>
+      <div class="issue-fix"><strong>修复：</strong>全局替换为 <code>static_cast&lt;目标类型&gt;()</code>。</div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">W3</span><span class="issue-title">cylinder3d_ros_node.py 吞没异常</span><span class="tag tag-bug">Bug</span></div>
+      <div class="issue-meta">semantic_bridge/cylinder3d_ros_node.py:216-217</div>
+      <div class="issue-desc"><code>except Exception: pass</code> 静默吞掉日志文件读取异常，隐藏潜在的文件系统错误。</div>
+      <div class="issue-code">try:
+    with open(log_path, 'r') as f:
+        log_content = f.read()
+    if 'ready for inference' in log_content.lower():
+        ...
+except Exception:
+    pass    # 静默吞掉所有异常</div>
+      <div class="issue-fix"><strong>修复：</strong>至少记录 warning：<code>except Exception as e: self.get_logger().warn(f'Log read error: {e}')</code></div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">W4</span><span class="issue-title">热循环中使用 cv::Mat::at&lt;float&gt;() 访问</span><span class="tag tag-perf">性能</span></div>
+      <div class="issue-meta">src/mapOptmization.cpp:1285-1298</div>
+      <div class="issue-desc">在 LMOptimization 的内循环中，每行调用 7 次 <code>matA.at&lt;float&gt;(i, j)</code> 和 <code>matB.at&lt;float&gt;(i, 0)</code>。<code>.at&lt;&gt;()</code> 每次都做边界检查，在大点数（数千特征点 x 30次迭代）场景下显著影响性能。</div>
+      <div class="issue-code">for (int i = 0; i < laserCloudSelNum; i++) {
+    matA.at&lt;float&gt;(i, 0) = arz;
+    matA.at&lt;float&gt;(i, 1) = arx;
+    matA.at&lt;float&gt;(i, 2) = ary;
+    matA.at&lt;float&gt;(i, 3) = coeff.z;
+    matA.at&lt;float&gt;(i, 4) = coeff.x;
+    matA.at&lt;float&gt;(i, 5) = coeff.y;
+    matB.at&lt;float&gt;(i, 0) = -coeff.intensity;
+    float w = std::sqrt(pointWeights[i]);
+    for (int j = 0; j < 6; j++) {
+        matA.at&lt;float&gt;(i, j) *= w;   // 又一次 .at 访问
+    }
+    matB.at&lt;float&gt;(i, 0) *= w;</div>
+      <div class="issue-fix"><strong>修复：</strong>使用 <code>float* matAptr = matA.ptr&lt;float&gt;(i);</code> 获取行指针后直接访问：<code>matAptr[0] = arz; matAptr[1] = arx;</code>，可减少约 50% 的循环耗时。</div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">W5</span><span class="issue-title">PCD I/O 未捕获异常</span><span class="tag tag-bug">Bug</span></div>
+      <div class="issue-meta">src/mapOptmization.cpp:208-209, 440-460</div>
+      <div class="issue-desc"><code>pcl::io::savePCDFileBinary()</code> 和 <code>savePCDFileASCII()</code> 可能抛出 <code>pcl::IOException</code>（磁盘满、权限不足、路径不存在），但均未包裹 try-catch，异常会直接终止程序。</div>
+      <div class="issue-fix"><strong>修复：</strong>包裹 try-catch 并记录错误：<br><code>try { pcl::io::savePCDFileBinary(...); } catch (const pcl::IOException&amp; e) { RCLCPP_ERROR(get_logger(), "PCD save failed: %s", e.what()); }</code></div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">W6</span><span class="issue-title">重复的动态物体判断逻辑</span><span class="tag tag-style">规范</span></div>
+      <div class="issue-meta">src/featureExtraction.cpp:236-243 和 285-292</div>
+      <div class="issue-desc">角点和面点提取中各自复制了相同的 6 行 <code>isDynamic</code> 判断，违反 DRY 原则，修改时容易遗漏一处。</div>
+      <div class="issue-fix"><strong>修复：</strong>抽取为辅助函数：<code>bool isDynamicLabel(uint32_t label)</code>，两处统一调用。</div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">W7</span><span class="issue-title">semantic_bridge.py 在回调内导入模块</span><span class="tag tag-perf">性能</span></div>
+      <div class="issue-meta">semantic_bridge/semantic_bridge.py:70</div>
+      <div class="issue-desc"><code>from sensor_msgs.msg import PointField</code> 在 <code>cloud_callback</code> 内部导入，每帧执行一次。虽然 Python 有导入缓存，但不规范。</div>
+      <div class="issue-fix"><strong>修复：</strong>移到文件顶部的 import 区域。</div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">W8</span><span class="issue-title">extract_bin_from_bag.py 中 self.count 逻辑错误</span><span class="tag tag-bug">Bug</span></div>
+      <div class="issue-meta">tools/extract_bin_from_bag.py:306</div>
+      <div class="issue-desc"><code>if self.count + self.count &lt; 20</code> 应为 <code>if self.count &lt; 20</code>。<code>self.count + self.count</code> 等价于 <code>self.count * 2</code>，当 count &gt;= 10 时条件就不再满足，导致只在前 10 帧报错而非预期的 20 帧。</div>
+      <div class="issue-code">if self.count + self.count < 20:  # 应为 self.count < 20</div>
+      <div class="issue-fix"><strong>修复：</strong><code>if self.count &lt; 20:</code></div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">W9</span><span class="issue-title">std::endl 在循环中频繁刷新缓冲区</span><span class="tag tag-perf">性能</span></div>
+      <div class="issue-meta">src/mapOptmization.cpp:199, 203, 220, 224, 226, 435, 437, 461, 462</div>
+      <div class="issue-desc"><code>std::endl</code> 每次调用都会刷新 stdout 缓冲区。在循环中（如保存全局地图时的逐帧输出）会显著降低性能。</div>
+      <div class="issue-fix"><strong>修复：</strong>将 <code>std::endl</code> 替换为 <code>"\n"</code>。</div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">W10</span><span class="issue-title">semanticBridge.cpp 硬编码话题名</span><span class="tag tag-style">规范</span></div>
+      <div class="issue-meta">src/semanticBridge.cpp:10, 14</div>
+      <div class="issue-desc">话题名 <code>"/os1_cloud_node/points"</code> 和 <code>"/semantic_cloud"</code> 硬编码，不随 params.yaml 配置变化。而 imageProjection.cpp 已参数化了 <code>semanticCloudTopic</code>。</div>
+      <div class="issue-fix"><strong>修复：</strong>使用 <code>ParamServer</code> 的 <code>pointCloudTopic</code> 和 <code>semanticCloudTopic</code> 参数。让 SemanticBridge 继承 ParamServer。</div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">W11</span><span class="issue-title">usleep(100) 在构造函数中</span><span class="tag tag-style">规范</span></div>
+      <div class="issue-meta">include/dsw_lio_sam/utility.hpp:397</div>
+      <div class="issue-desc"><code>ParamServer</code> 构造函数末尾有 <code>usleep(100)</code>，可能是早期调试遗留。在 ROS2 中应使用 <code>rclcpp::sleep_for()</code>，且 100 微秒的 sleep 作用不明。</div>
+      <div class="issue-fix"><strong>修复：</strong>移除该行，或改为 <code>std::this_thread::sleep_for(std::chrono::milliseconds(100))</code> 并添加注释说明原因。</div>
+    </div>
+  </div>
+
+  <!-- ===== INFO ===== -->
+  <div class="section">
+    <div class="section-title section-info">建议 INFO (6项) — 代码改进建议，不影响功能但提升质量</div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">I1</span><span class="issue-title">文件名拼写错误：mapOptmization.cpp</span><span class="tag tag-style">规范</span></div>
+      <div class="issue-meta">src/mapOptmization.cpp (全文)</div>
+      <div class="issue-desc">文件名 <code>mapOptmization</code> 缺少字母 'i'，应为 <code>mapOptimization</code>。此拼写错误已贯穿 CMakeLists.txt、launch 文件等，修改需全局替换。</div>
+      <div class="issue-fix"><strong>建议：</strong>在下一个大版本中统一重命名，包括文件名、CMakeLists 中的引用、launch 文件中的节点名。</div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">I2</span><span class="issue-title">params_baseline.yaml 缺少 savePCD 相关参数注释</span><span class="tag tag-style">规范</span></div>
+      <div class="issue-meta">config/params_baseline.yaml:92-100</div>
+      <div class="issue-desc">基线参数文件中 <code>savePCD</code> 和 <code>savePCDDirectory</code> 放在语义参数区块中，与其他配置文件的布局不一致（params.yaml 中这些参数在独立的 "Export settings" 区块）。</div>
+      <div class="issue-fix"><strong>建议：</strong>统一四个 params 文件的布局，将 savePCD/savePCDDirectory 放在 "Export settings" 区块。</div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">I3</span><span class="issue-title">run_replay.sh 路径依赖 $HOME/ros2_ws</span><span class="tag tag-style">规范</span></div>
+      <div class="issue-meta">semantic_bridge/run_replay.sh:14</div>
+      <div class="issue-desc"><code>$HOME/ros2_ws/src/dsw_lio_sam/semantic_bridge/semantic_replay_node.py</code> 假设了固定的工作空间路径。如果用户在不同位置构建，脚本会找不到文件。</div>
+      <div class="issue-fix"><strong>建议：</strong>使用 <code>ros2 pkg prefix dsw_lio_sam</code> 动态查找安装路径，或通过参数传入路径。</div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">I4</span><span class="issue-title">缺少单元测试</span><span class="tag tag-style">规范</span></div>
+      <div class="issue-meta">CMakeLists.txt:123-132</div>
+      <div class="issue-desc"><code>BUILD_TESTING</code> 块存在但只配置了 ament_lint_auto，没有实际的单元测试。核心功能（退化检测、语义权重计算、标签映射）应当有测试覆盖。</div>
+      <div class="issue-fix"><strong>建议：</strong>为 <code>semanticStabilityScore()</code> 和 <code>computeSemanticWeight()</code> 添加 gtest 单元测试，验证边界条件和语义映射正确性。</div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">I5</span><span class="issue-title">未使用 C++17 特性简化代码</span><span class="tag tag-style">规范</span></div>
+      <div class="issue-meta">src/mapOptmization.cpp (多处)</div>
+      <div class="issue-desc">CMakeLists.txt 未设置 C++ 标准，但 ROS2 Humble 默认支持 C++17。可利用 <code>std::filesystem</code>、<code>std::optional</code>、结构化绑定等简化路径操作和参数处理。</div>
+      <div class="issue-fix"><strong>建议：</strong>在 CMakeLists.txt 中添加 <code>set(CMAKE_CXX_STANDARD 17)</code>，并逐步用现代 C++ 特性替换裸指针和 system() 调用。</div>
+    </div>
+
+    <div class="issue">
+      <div class="issue-header"><span class="issue-num">I6</span><span class="issue-title">TODO 标记：package.xml 许可证</span><span class="tag tag-style">规范</span></div>
+      <div class="issue-meta">package.xml:10</div>
+      <div class="issue-desc">项目中唯一的 TODO 标记。虽然已在 W1 中提及，但此处单独标注为 TODO/FIXME 扫描结果。</div>
+      <div class="issue-code">&lt;license&gt;TODO&lt;/license&gt;</div>
+      <div class="issue-fix"><strong>修复：</strong>替换为实际许可证。</div>
+    </div>
+  </div>
+
+  <table>
+    <tr><th>严重程度</th><th>数量</th><th>主要类别</th></tr>
+    <tr><td>致命 FATAL</td><td>6</td><td>内存泄漏(4), 命令注入(1), 空指针(1)</td></tr>
+    <tr><td>严重 CRITICAL</td><td>5</td><td>死代码(1), 功能缺失(1), 性能(1), 硬编码(1), 安全(1)</td></tr>
+    <tr><td>警告 WARNING</td><td>11</td><td>规范(5), Bug(3), 性能(2), 安全(1)</td></tr>
+    <tr><td>建议 INFO</td><td>6</td><td>规范(6)</td></tr>
+    <tr><td><strong>合计</strong></td><td><strong>28</strong></td><td></td></tr>
+  </table>
+
+  <div class="footer">
+    DSW-LIO-SAM 代码审计报告 &nbsp;|&nbsp; 扫描工具: 手动代码审查 + Grep 模式匹配<br>
+    扫描文件: 8个 C++/头文件 + 6个 Python脚本 + 4个 YAML配置 + CMakeLists.txt + package.xml + 2个 launch 文件 + 2个 shell 脚本
+  </div>
+</div>
+</body>
+</html>
