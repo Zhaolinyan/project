@@ -40,6 +40,8 @@ def generate_launch_description():
                               description='体素 rho 最大值 (有效感知范围)'),
         DeclareLaunchArgument('rho_filter', default_value='55.0',
                               description='噪声过滤距离 (Ouster 远距离噪声)'),
+        DeclareLaunchArgument('use_config_voxel_profile', default_value='true',
+                              description='Use checkpoint-compatible Cylinder3D voxel profile by default'),
 
         # ---- 启动信息 ----
         LogInfo(msg=['\n' + '='*60]),
@@ -66,6 +68,7 @@ def generate_launch_description():
                 '--z_max',       LaunchConfiguration('z_max'),
                 '--rho_max',     LaunchConfiguration('rho_max'),
                 '--rho_filter',  LaunchConfiguration('rho_filter'),
+                '--use_config_voxel_profile', LaunchConfiguration('use_config_voxel_profile'),
             ],
         ),
     ])

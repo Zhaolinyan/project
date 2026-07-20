@@ -136,12 +136,6 @@ public:
     pcl::VoxelGrid<PointType> downSizeFilterCorner;
     pcl::VoxelGrid<PointType> downSizeFilterSurf;
 
-    // DSW-LIO-SAM: 用于当前帧语义点云降采样
-    pcl::VoxelGrid<PointTypeL> downSizeFilterCornerL;
-    pcl::VoxelGrid<PointTypeL> downSizeFilterSurfL;
-    // ===== DSW-LIO-SAM 结束 =====
-
-
     pcl::VoxelGrid<PointType> downSizeFilterICP;
     pcl::VoxelGrid<PointType> downSizeFilterSurroundingKeyPoses; // for surrounding key poses of scan-to-map optimization
 
@@ -153,10 +147,10 @@ public:
     std::mutex mtx;
     std::mutex mtxLoopInfo;
 
-    // ===== DSW-LIO-SAM: 连续退化指标（替代原始二值 isDegenerate）=====
-    float degeneracyScore = 0.0f;  // ∈ [0,1]，0=不退化，1=严重退化
-    Eigen::Matrix<float, 6, 6> matP;
-    // ===== DSW-LIO-SAM 结束 =====
+    bool isDegenerate = false;
+    float degeneracyScore = 0.0f;
+    float semanticDegeneracyScore = 0.0f;
+    cv::Mat matP;
 
     int laserCloudCornerFromMapDSNum = 0;
     int laserCloudSurfFromMapDSNum = 0;
@@ -301,9 +295,6 @@ public:
 
     void allocateMemory()
     {
-        downSizeFilterCornerL.setLeafSize(mappingCornerLeafSize, mappingCornerLeafSize, mappingCornerLeafSize);
-        downSizeFilterSurfL.setLeafSize(mappingSurfLeafSize, mappingSurfLeafSize, mappingSurfLeafSize);
-        
         cloudKeyPoses3D.reset(new pcl::PointCloud<PointType>());
         cloudKeyPoses6D.reset(new pcl::PointCloud<PointTypePose>());
         copy_cloudKeyPoses3D.reset(new pcl::PointCloud<PointType>());
@@ -346,7 +337,7 @@ public:
             transformTobeMapped[i] = 0;
         }
 
-        matP.setZero();
+        matP = cv::Mat(6, 6, CV_32F, cv::Scalar::all(0));
     }
 
     void laserCloudInfoHandler(const dsw_lio_sam::msg::CloudInfo::SharedPtr msgIn)
@@ -1024,14 +1015,12 @@ public:
     {
         // Downsample cloud from current scan
         laserCloudCornerLastDS->clear();
-        downSizeFilterCornerL.setInputCloud(laserCloudCornerLast);
-        downSizeFilterCornerL.filter(*laserCloudCornerLastDS);
+        voxelDownsampleSemanticCloud(laserCloudCornerLast, *laserCloudCornerLastDS, mappingCornerLeafSize);
         laserCloudCornerLastDSNum = laserCloudCornerLastDS->size();
 
 
         laserCloudSurfLastDS->clear();
-        downSizeFilterSurfL.setInputCloud(laserCloudSurfLast);
-        downSizeFilterSurfL.filter(*laserCloudSurfLastDS);
+        voxelDownsampleSemanticCloud(laserCloudSurfLast, *laserCloudSurfLastDS, mappingSurfLeafSize);
         laserCloudSurfLastDSNum = laserCloudSurfLastDS->size();
 
     }
@@ -1039,6 +1028,13 @@ public:
     void updatePointAssociateToMap()
     {
         transPointAssociateToMap = trans2Affine3f(transformTobeMapped);
+    }
+
+    float semanticAlphaForCurrentIteration() const
+    {
+        if (!semanticEnabled || semanticWeightAlpha <= 0.0f)
+            return 0.0f;
+        return semanticWeightAlpha * semanticDegeneracyScore;
     }
 
     void cornerOptimization()
@@ -1140,7 +1136,7 @@ public:
                     laserCloudOriCornerFlag[i] = true;
                     
                     // ===== DSW-LIO-SAM: 计算并存储语义权重 =====
-                    float alphaEff = semanticWeightAlpha * degeneracyScore;
+                    float alphaEff = semanticAlphaForCurrentIteration();
                     laserCloudOriCornerWeights[i] = computeSemanticWeight(
                         static_cast<SemanticLabel>(pointOri.label),
                         alphaEff);
@@ -1230,7 +1226,7 @@ public:
                         laserCloudOriSurfFlag[i] = true;
                         
                         // ===== DSW-LIO-SAM: 计算并存储语义权重 =====
-                        float alphaEff = semanticWeightAlpha * degeneracyScore;
+                        float alphaEff = semanticAlphaForCurrentIteration();
                         laserCloudOriSurfWeights[i] = computeSemanticWeight(
                             static_cast<SemanticLabel>(pointOri.label),
                             alphaEff);
@@ -1298,8 +1294,6 @@ public:
         cv::Mat matB(laserCloudSelNum, 1, CV_32F, cv::Scalar::all(0));
         cv::Mat matAtB(6, 1, CV_32F, cv::Scalar::all(0));
         cv::Mat matX(6, 1, CV_32F, cv::Scalar::all(0));
-        cv::Mat matP(6, 6, CV_32F, cv::Scalar::all(0));
-
         PointType pointOri, coeff;
 
         for (int i = 0; i < laserCloudSelNum; i++) {
@@ -1381,13 +1375,15 @@ public:
             } else {
                 degeneracyScore = 0.0f;
             }
+            semanticDegeneracyScore = degeneracyScore;
+            isDegenerate = degenerateCount > 0;
             matP = matV.inv() * matV2;
             // ===== DSW-LIO-SAM 结束 =====
 
         }
 
         // ===== DSW-LIO-SAM: 退化时抑制不可靠方向的位姿更新 =====
-        if (degeneracyScore > degeneracyThreshold)
+        if (isDegenerate)
         {
             cv::Mat matX2(6, 1, CV_32F, cv::Scalar::all(0));
             matX.copyTo(matX2);
@@ -1423,6 +1419,10 @@ public:
         if (cloudKeyPoses3D->points.empty())
             return;
 
+        isDegenerate = false;
+        degeneracyScore = 0.0f;
+        semanticDegeneracyScore = 0.0f;
+
         if (laserCloudCornerLastDSNum > edgeFeatureMinValidNum && laserCloudSurfLastDSNum > surfFeatureMinValidNum)
         {
             kdtreeCornerFromMap->setInputCloud(laserCloudCornerFromMapDS);
@@ -1438,7 +1438,10 @@ public:
 
                 combineOptimizationCoeffs();
 
-                if (LMOptimization(iterCount) == true)
+                bool converged = LMOptimization(iterCount);
+                if (converged &&
+                    !(semanticEnabled && semanticWeightAlpha > 0.0f &&
+                      semanticDegeneracyScore > degeneracyThreshold && iterCount == 0))
                     break;              
             }
 

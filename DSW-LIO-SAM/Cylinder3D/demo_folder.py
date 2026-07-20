@@ -6,6 +6,7 @@ import os
 import time
 import argparse
 import sys
+import json
 import numpy as np
 import torch
 import torch.optim as optim
@@ -20,6 +21,7 @@ from dataloader.dataset_semantickitti import get_model_class, collate_fn_BEV
 from dataloader.pc_dataset import get_pc_model_class
 
 from utils.load_save_util import load_checkpoint
+from utils.inference_profile import resolve_inference_profile, sha256_file
 
 import warnings
 
@@ -59,10 +61,11 @@ def build_dataset(dataset_config,
     return demo_dataset_loader
 
 def main(args):
-    pytorch_device = torch.device('cuda:0')
+    pytorch_device = torch.device(args.device)
     config_path = args.config_path
     project_root = os.path.dirname(os.path.abspath(__file__))
-    configs = load_config_data(config_path)
+    config_abs = config_path if os.path.isabs(config_path) else os.path.join(project_root, config_path)
+    configs = load_config_data(config_abs)
     dataset_config = configs['dataset_params']
     if not os.path.isabs(dataset_config["label_mapping"]):
         dataset_config["label_mapping"] = os.path.join(project_root, dataset_config["label_mapping"])
@@ -74,13 +77,14 @@ def main(args):
     demo_batch_size = 1
     model_config = configs['model_params']
     train_hypers = configs['train_params']
+    profile = resolve_inference_profile(project_root, train_hypers, dataset_config)
+    dataset_config['min_volume_space'] = profile['min_volume_space']
+    dataset_config['max_volume_space'] = profile['max_volume_space']
 
     grid_size = model_config['output_shape']
     num_class = model_config['num_class']
     ignore_label = dataset_config['ignore_label']
-    model_load_path = train_hypers['model_load_path']
-    if not os.path.isabs(model_load_path):
-        model_load_path = os.path.join(project_root, model_load_path)
+    model_load_path = profile['checkpoint']
 
     SemKITTI_label_name = get_SemKITTI_label_name(dataset_config["label_mapping"])
     unique_label = np.asarray(sorted(list(SemKITTI_label_name.keys())))[1:] - 1
@@ -104,6 +108,19 @@ def main(args):
     inv_learning_map = semkittiyaml['learning_map_inv']
 
     my_model.eval()
+    metadata = {
+        'model_kind': profile['model_kind'],
+        'preprocessing_profile': profile['preprocessing_profile'],
+        'checkpoint': profile['checkpoint'],
+        'checkpoint_sha256': sha256_file(profile['checkpoint']),
+        'config_path': os.path.abspath(config_abs),
+        'min_volume_space': profile['min_volume_space'],
+        'max_volume_space': profile['max_volume_space'],
+        'input_dir': os.path.abspath(data_dir),
+    }
+    with open(os.path.join(save_dir, 'inference_metadata.json'), 'w', encoding='utf-8') as stream:
+        json.dump(metadata, stream, indent=2, sort_keys=True)
+
     hist_list = []
     demo_loss_list = []
     with torch.no_grad():
@@ -155,6 +172,7 @@ if __name__ == '__main__':
     parser.add_argument('--demo-folder', type=str, default='', help='path to the folder containing demo lidar scans', required=True)
     parser.add_argument('--save-folder', type=str, default='', help='path to save your result', required=True)
     parser.add_argument('--demo-label-folder', type=str, default='', help='path to the folder containing demo labels')
+    parser.add_argument('--device', type=str, default='cuda:0')
     args = parser.parse_args()
 
     print(' '.join(sys.argv))

@@ -59,6 +59,7 @@ class Cylinder3DNode(Node):
         self.declare_parameter("z_max", float(args.get("z_max", 15.0)))
         self.declare_parameter("rho_max", float(args.get("rho_max", 50.0)))
         self.declare_parameter("rho_filter", float(args.get("rho_filter", 55.0)))
+        self.declare_parameter("use_config_voxel_profile", bool(args.get("use_config_voxel_profile", True)))
 
         config_path = self.get_parameter("config_path").value
         device_str = self.get_parameter("device").value
@@ -69,6 +70,7 @@ class Cylinder3DNode(Node):
         self.z_max = self.get_parameter("z_max").value
         self.rho_max = self.get_parameter("rho_max").value
         self.rho_filter = self.get_parameter("rho_filter").value
+        self.use_config_voxel_profile = self.get_parameter("use_config_voxel_profile").value
 
         self._proc = self._start_inference_subprocess(config_path, device_str)
 
@@ -83,7 +85,8 @@ class Cylinder3DNode(Node):
         self._frame_count = 0
         self.get_logger().info(
             f"Cylinder3D IPC node started | Input: {input_topic} | Output: {output_topic} | "
-            f"z=[{self.z_min},{self.z_max}] | rho_filter={self.rho_filter}m"
+            f"voxel_profile={'config/checkpoint' if self.use_config_voxel_profile else 'launch override'} | "
+            f"rho_filter={self.rho_filter}m"
         )
 
     def _find_conda_python(self):
@@ -122,10 +125,13 @@ class Cylinder3DNode(Node):
             inf_script,
             "--config_path", config_path,
             "--device", device,
-            "--z_min", str(self.z_min),
-            "--z_max", str(self.z_max),
-            "--rho_max", str(self.rho_max),
         ]
+        if not self.use_config_voxel_profile:
+            cmd.extend([
+                "--z_min", str(self.z_min),
+                "--z_max", str(self.z_max),
+                "--rho_max", str(self.rho_max),
+            ])
 
         log_dir = os.path.expanduser("~/dsw_lio_sam_logs")
         os.makedirs(log_dir, exist_ok=True)
@@ -208,26 +214,23 @@ class Cylinder3DNode(Node):
             self._proc.stdin.flush()
         except BrokenPipeError:
             self.get_logger().error("[IPC] BrokenPipe on write")
-            return np.zeros(n_pts, dtype=np.uint32)
+            return None
 
         resp_header = read_exact(self._proc.stdout, 8, timeout=30)
         if resp_header is None:
             self.get_logger().error("[IPC] EOF/timeout on header read")
-            return np.zeros(n_pts, dtype=np.uint32)
+            return None
 
         n_labels = struct.unpack("<q", resp_header)[0]
         label_data = read_exact(self._proc.stdout, n_labels * 4, timeout=30)
         if label_data is None:
             self.get_logger().error("[IPC] EOF/timeout on label data read")
-            return np.zeros(n_pts, dtype=np.uint32)
+            return None
 
         labels = np.frombuffer(label_data, dtype="<u4").copy()
         if n_labels != n_pts:
             self.get_logger().warn(f"[IPC] Label count mismatch: expected {n_pts}, got {n_labels}")
-            fixed = np.zeros(n_pts, dtype=np.uint32)
-            n = min(n_pts, n_labels)
-            fixed[:n] = labels[:n]
-            return fixed
+            return None
         return labels
 
     def _find_field_offset(self, msg, field_names):
@@ -331,7 +334,11 @@ class Cylinder3DNode(Node):
         if intensity.max() > 1.0:
             intensity = intensity / max(float(intensity.max()), 1e-6)
 
-        inferred_labels = self._send_and_recv(xyz, intensity).astype(np.uint32, copy=False)
+        inferred_labels = self._send_and_recv(xyz, intensity)
+        if inferred_labels is None:
+            self.get_logger().error("Cylinder3D inference failed; semantic frame was not published")
+            return
+        inferred_labels = inferred_labels.astype(np.uint32, copy=False)
         labels = np.zeros(num_points, dtype=np.uint32)
         labels[valid] = inferred_labels
 
@@ -348,6 +355,9 @@ class Cylinder3DNode(Node):
 
 
 def main():
+    def parse_bool(value):
+        return str(value).strip().lower() in ("1", "true", "yes", "on")
+
     parser = argparse.ArgumentParser(description="Cylinder3D semantic segmentation ROS2 node (IPC)")
     parser.add_argument("--config_path", type=str, default="config/newer_college.yaml")
     parser.add_argument("--device", type=str, default="cuda:0")
@@ -357,6 +367,7 @@ def main():
     parser.add_argument("--z_max", type=float, default=15.0)
     parser.add_argument("--rho_max", type=float, default=50.0)
     parser.add_argument("--rho_filter", type=float, default=55.0)
+    parser.add_argument("--use_config_voxel_profile", type=parse_bool, default=True)
     args, _ = parser.parse_known_args()
 
     rclpy.init()

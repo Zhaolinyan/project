@@ -92,8 +92,8 @@
     # ===== DSW-LIO-SAM: 真实语义实验参数 =====
     semanticCloudTopic: "/semantic_cloud"           # 语义点云话题名
     degeneracyThreshold: 0.3                        # 退化检测阈值
-    requireSemanticCloud: true
-    minimumSemanticCoverage: 0.95
+    requireSemanticCloud: false
+    minimumSemanticCoverage: 0.0
     pseudoGroundMaxZ: -0.5
     pseudoStructureMinZ: 2.0
     pseudoCanopyMinZ: 2.0

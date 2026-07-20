@@ -31,9 +31,6 @@ public:
     std::mutex deskewedCloudLock;
     std::deque<sensor_msgs::msg::PointCloud2> deskewedCloudQueue;
 
-    pcl::VoxelGrid<PointTypeL> downSizeFilter;
-
-
     dsw_lio_sam::msg::CloudInfo cloudInfo;
     std_msgs::msg::Header cloudHeader;
 
@@ -66,8 +63,6 @@ public:
     void initializationValue()
     {
         cloudSmoothness.resize(N_SCAN*Horizon_SCAN);
-
-        downSizeFilter.setLeafSize(odometrySurfLeafSize, odometrySurfLeafSize, odometrySurfLeafSize);
 
         extractedCloud.reset(new pcl::PointCloud<PointType>());
         cornerCloud.reset(new pcl::PointCloud<PointTypeL>());
@@ -332,8 +327,7 @@ public:
             }
 
             surfaceCloudScanDS->clear();
-            downSizeFilter.setInputCloud(surfaceCloudScan);
-            downSizeFilter.filter(*surfaceCloudScanDS);
+            voxelDownsampleSemanticCloud(surfaceCloudScan, *surfaceCloudScanDS, odometrySurfLeafSize);
 
             *surfaceCloud += *surfaceCloudScanDS;
         }

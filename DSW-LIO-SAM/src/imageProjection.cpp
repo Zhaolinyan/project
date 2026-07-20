@@ -1,5 +1,6 @@
 #include "utility.hpp"
 #include "dsw_lio_sam/msg/cloud_info.hpp"
+#include <condition_variable>
 
 struct VelodynePointXYZIRT
 {
@@ -96,12 +97,14 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subSemanticCloud;
     rclcpp::CallbackGroup::SharedPtr callbackGroupSemantic;
     std::deque<sensor_msgs::msg::PointCloud2> semanticCloudQueue;
+    std::condition_variable semanticCv;
     pcl::PointCloud<PointTypeL>::Ptr semanticCloudIn;  // 带语义标签的点云
     std::vector<uint32_t> pointSemanticLabels;          // 当前帧每个点的语义标签
     std::vector<float> pointSemanticWeights;            // 当前帧每个点的语义权重
     std::vector<uint32_t> fullCloudSemanticLabels;
     std::vector<float> fullCloudSemanticWeights;
-    static constexpr double semanticTimeTolerance = 0.05;  // seconds
+    static constexpr double semanticTimeTolerance = 0.12;  // seconds
+    static constexpr int semanticWaitTimeoutMs = 1000;
     static constexpr float semanticNearestSqDist = 0.05f * 0.05f;
     // ===== DSW-LIO-SAM 结束 =====
 
@@ -152,8 +155,9 @@ public:
             auto semanticOpt = rclcpp::SubscriptionOptions();
             semanticOpt.callback_group = callbackGroupSemantic;
 
+            auto semanticQos = rclcpp::QoS(rclcpp::KeepLast(200)).best_effort();
             subSemanticCloud = create_subscription<sensor_msgs::msg::PointCloud2>(
-                semanticCloudTopic, qos_lidar,
+                semanticCloudTopic, semanticQos,
                 std::bind(&ImageProjection::semanticCloudHandler, this, std::placeholders::_1),
                 semanticOpt);
         }
@@ -248,10 +252,13 @@ public:
     // ===== DSW-LIO-SAM: 语义点云回调 =====
     void semanticCloudHandler(const sensor_msgs::msg::PointCloud2::SharedPtr semanticCloudMsg)
     {
-        std::lock_guard<std::mutex> lock(semanticLock);
-        semanticCloudQueue.push_back(*semanticCloudMsg);
-        while (semanticCloudQueue.size() > 20)
-            semanticCloudQueue.pop_front();
+        {
+            std::lock_guard<std::mutex> lock(semanticLock);
+            semanticCloudQueue.push_back(*semanticCloudMsg);
+            while (semanticCloudQueue.size() > 50)
+                semanticCloudQueue.pop_front();
+        }
+        semanticCv.notify_all();
     }
 
     bool cacheSemanticCloud()
@@ -268,62 +275,78 @@ public:
         pointSemanticWeights.assign(cloudSize, 1.0f);
         
         sensor_msgs::msg::PointCloud2 semanticMsg;
+        const double targetTime = stamp2Sec(cloudHeader.stamp);
         {
-            std::lock_guard<std::mutex> lock(semanticLock);
-            if (semanticCloudQueue.empty()) {
-                if (requireSemanticCloud) {
-                    RCLCPP_WARN_THROTTLE(
-                        get_logger(), *get_clock(), 2000,
-                        "Semantic cloud is required but no semantic messages have arrived.");
-                    return false;
-                }
-                return true;
-            }
+            std::unique_lock<std::mutex> lock(semanticLock);
 
-            const double targetTime = stamp2Sec(cloudHeader.stamp);
-
-            while (!semanticCloudQueue.empty() &&
-                   stamp2Sec(semanticCloudQueue.front().header.stamp) <
-                       targetTime - semanticTimeTolerance)
-            {
-                semanticCloudQueue.pop_front();
-            }
-
-            if (semanticCloudQueue.empty()) {
-                if (requireSemanticCloud) {
-                    RCLCPP_WARN_THROTTLE(
-                        get_logger(), *get_clock(), 2000,
-                        "Semantic cloud is required but all queued semantic messages are too old.");
-                    return false;
-                }
-                return true;
-            }
-
-            size_t bestIndex = semanticCloudQueue.size();
-            double bestDiff = std::numeric_limits<double>::max();
-            for (size_t i = 0; i < semanticCloudQueue.size(); ++i)
-            {
-                const double diff = std::abs(stamp2Sec(semanticCloudQueue[i].header.stamp) - targetTime);
-                if (diff < bestDiff)
+            auto try_pop_synced_semantic = [&]() -> bool {
+                while (!semanticCloudQueue.empty() &&
+                       stamp2Sec(semanticCloudQueue.front().header.stamp) <
+                           targetTime - semanticTimeTolerance)
                 {
-                    bestDiff = diff;
-                    bestIndex = i;
+                    semanticCloudQueue.pop_front();
+                }
+
+                size_t bestIndex = semanticCloudQueue.size();
+                double bestDiff = std::numeric_limits<double>::max();
+                for (size_t i = 0; i < semanticCloudQueue.size(); ++i)
+                {
+                    const double diff = std::abs(stamp2Sec(semanticCloudQueue[i].header.stamp) - targetTime);
+                    if (diff < bestDiff)
+                    {
+                        bestDiff = diff;
+                        bestIndex = i;
+                    }
+                }
+
+                if (bestIndex == semanticCloudQueue.size() || bestDiff > semanticTimeTolerance)
+                    return false;
+
+                semanticMsg = semanticCloudQueue[bestIndex];
+                semanticCloudQueue.erase(
+                    semanticCloudQueue.begin(),
+                    semanticCloudQueue.begin() + static_cast<std::ptrdiff_t>(bestIndex) + 1);
+                return true;
+            };
+
+            bool hasSyncedSemantic = try_pop_synced_semantic();
+            if (!hasSyncedSemantic)
+            {
+                const auto deadline = std::chrono::steady_clock::now() +
+                    std::chrono::milliseconds(semanticWaitTimeoutMs);
+                while (!hasSyncedSemantic && std::chrono::steady_clock::now() < deadline)
+                {
+                    semanticCv.wait_until(lock, deadline);
+                    hasSyncedSemantic = try_pop_synced_semantic();
                 }
             }
 
-            if (bestIndex == semanticCloudQueue.size() || bestDiff > semanticTimeTolerance)
+            if (!hasSyncedSemantic)
             {
-                RCLCPP_WARN_THROTTLE(
-                    get_logger(), *get_clock(), 2000,
-                    "No synced semantic cloud for lidar stamp %.6f; best diff %.3fs",
-                    targetTime, bestDiff);
+                double bestDiff = std::numeric_limits<double>::max();
+                for (const auto& queuedSemantic : semanticCloudQueue)
+                {
+                    const double diff = std::abs(stamp2Sec(queuedSemantic.header.stamp) - targetTime);
+                    if (diff < bestDiff)
+                        bestDiff = diff;
+                }
+
+                if (semanticCloudQueue.empty())
+                {
+                    RCLCPP_WARN_THROTTLE(
+                        get_logger(), *get_clock(), 2000,
+                        "No synced semantic cloud for lidar stamp %.6f; semantic queue is empty after waiting %.1fs",
+                        targetTime, semanticWaitTimeoutMs / 1000.0);
+                }
+                else
+                {
+                    RCLCPP_WARN_THROTTLE(
+                        get_logger(), *get_clock(), 2000,
+                        "No synced semantic cloud for lidar stamp %.6f after waiting %.1fs; best diff %.3fs",
+                        targetTime, semanticWaitTimeoutMs / 1000.0, bestDiff);
+                }
                 return !requireSemanticCloud;
             }
-
-            semanticMsg = semanticCloudQueue[bestIndex];
-            semanticCloudQueue.erase(
-                semanticCloudQueue.begin(),
-                semanticCloudQueue.begin() + static_cast<std::ptrdiff_t>(bestIndex) + 1);
         }
         
         // 取时间最近的一帧语义点云
@@ -457,11 +480,10 @@ public:
         if (!cachePointCloud(laserCloudMsg))
             return;
 
-        if (!cacheSemanticCloud())  // DSW-LIO-SAM: 缓存语义点云
+        if (!deskewInfo())
             return;
 
-
-        if (!deskewInfo())
+        if (!cacheSemanticCloud())  // DSW-LIO-SAM: 缓存语义点云
             return;
 
         projectPointCloud();

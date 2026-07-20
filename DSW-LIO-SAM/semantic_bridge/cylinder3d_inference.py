@@ -37,12 +37,11 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 def _find_cylinder3d_root():
     """Multi-strategy locate Cylinder3D directory"""
     candidates = [
+        os.environ.get('CYLINDER3D_ROOT', ''),
         # Installed: install/dsw_lio_sam/lib/dsw_lio_sam -> src/... (up 3 levels)
         os.path.join(_SCRIPT_DIR, '..', '..', '..', 'src', 'dsw_lio_sam', 'Cylinder3D'),
         # Source direct run: semantic_bridge/ -> ../Cylinder3D
         os.path.join(_SCRIPT_DIR, '..', 'Cylinder3D'),
-        # Absolute path (WSL)
-        '/home/zly/ros2_ws/src/dsw_lio_sam/Cylinder3D',
     ]
     for c in candidates:
         # builder is a Python package directory, not a single builder.py file
@@ -61,6 +60,7 @@ import yaml
 from builder import model_builder
 from config.config import load_config_data
 from utils.load_save_util import load_checkpoint
+from utils.inference_profile import resolve_inference_profile
 
 
 def read_exact(fd, n_bytes):
@@ -72,10 +72,7 @@ def read_exact(fd, n_bytes):
         if not chunk:
             if len(buf) == 0:
                 return None
-            # Pipe may be temporarily empty, keep trying
-            import time
-            time.sleep(0.001)
-            continue
+            return None
         buf += chunk
     return buf
 
@@ -85,23 +82,23 @@ class Cylinder3DInferenceEngine:
 
     def __init__(self, config_path='config/newer_college.yaml',
                  device='cuda:0',
-                 z_min=-5.0, z_max=15.0,
-                 rho_max=50.0):
+                 z_min=None, z_max=None,
+                 rho_max=None):
         project_root = CYLINDER3D_ROOT
 
         # ---- Load model ----
-        configs = load_config_data(os.path.join(project_root, config_path))
+        config_abs = config_path if os.path.isabs(config_path) else os.path.join(project_root, config_path)
+        configs = load_config_data(config_abs)
         model_config = configs['model_params']
         train_hypers = configs['train_params']
         dataset_config = configs['dataset_params']
+        profile = resolve_inference_profile(project_root, train_hypers, dataset_config)
 
         if not os.path.isabs(dataset_config['label_mapping']):
             dataset_config['label_mapping'] = os.path.join(
                 project_root, dataset_config['label_mapping'])
 
-        model_load_path = train_hypers['model_load_path']
-        if not os.path.isabs(model_load_path):
-            model_load_path = os.path.join(project_root, model_load_path)
+        model_load_path = profile['checkpoint']
 
         self.model = model_builder.build(model_config)
         self.model = load_checkpoint(model_load_path, self.model)
@@ -113,11 +110,16 @@ class Cylinder3DInferenceEngine:
         self.num_class = model_config['num_class']
 
         # ---- Voxel space parameters ----
-        self.z_min = z_min
-        self.z_max = z_max
-        self.rho_max = rho_max
-        self.max_volume_space = np.asarray([rho_max, np.pi, z_max])
-        self.min_volume_space = np.asarray([0, -np.pi, z_min])
+        min_volume = np.asarray(profile['min_volume_space'], dtype=np.float32)
+        max_volume = np.asarray(profile['max_volume_space'], dtype=np.float32)
+        if z_min is not None:
+            min_volume[2] = z_min
+        if z_max is not None:
+            max_volume[2] = z_max
+        if rho_max is not None:
+            max_volume[0] = rho_max
+        self.min_volume_space = min_volume
+        self.max_volume_space = max_volume
 
         # ---- Label mapping ----
         with open(dataset_config['label_mapping'], 'r') as f:
@@ -137,7 +139,8 @@ class Cylinder3DInferenceEngine:
         for learn_id, orig_id in self.inv_learning_map.items():
             self._inv_lut[learn_id] = orig_id
 
-        self._dsw_lut = np.zeros(256, dtype=np.uint32)
+        max_kitti_id = max(max(kitti_to_dsw.keys()), max(self.inv_learning_map.values())) + 1
+        self._dsw_lut = np.zeros(max_kitti_id, dtype=np.uint32)
         for kitti_id, dsw_id in kitti_to_dsw.items():
             self._dsw_lut[kitti_id] = dsw_id
 
@@ -181,9 +184,9 @@ def main():
     parser = argparse.ArgumentParser(description='Cylinder3D inference engine')
     parser.add_argument('--config_path', type=str, default='config/newer_college.yaml')
     parser.add_argument('--device', type=str, default='cuda:0')
-    parser.add_argument('--z_min', type=float, default=-5.0)
-    parser.add_argument('--z_max', type=float, default=15.0)
-    parser.add_argument('--rho_max', type=float, default=50.0)
+    parser.add_argument('--z_min', type=float, default=None)
+    parser.add_argument('--z_max', type=float, default=None)
+    parser.add_argument('--rho_max', type=float, default=None)
     args = parser.parse_args()
 
     # Initialize engine (load model to GPU)
