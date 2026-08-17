@@ -1,7 +1,8 @@
+// 特征提取模块  核心作用：从去畸变后的激光点云中提取角点和面点，同时融合语义信息，利用语义过滤动态物体点。
 #include "utility.hpp"
 #include "dsw_lio_sam/msg/cloud_info.hpp"
 
-struct smoothness_t{ 
+struct smoothness_t{  // 保存：曲率值 + 点索引，用于后面排序
     float value;
     size_t ind;
 };
@@ -12,7 +13,7 @@ struct by_value{
     }
 };
 
-class FeatureExtraction : public ParamServer
+class FeatureExtraction : public ParamServer  // FeatureExtraction类继承ParamServer
 {
 
 public:
@@ -28,8 +29,11 @@ public:
     pcl::PointCloud<PointTypeL>::Ptr cornerCloud;         // 改为带语义
     pcl::PointCloud<PointTypeL>::Ptr surfaceCloud;        // 改为带语义
 
-    std::mutex deskewedCloudLock;
+    std::mutex inputQueueLock;
     std::deque<sensor_msgs::msg::PointCloud2> deskewedCloudQueue;
+    std::deque<dsw_lio_sam::msg::CloudInfo> cloudInfoQueue;
+    static constexpr int64_t inputTimeToleranceNs = 1000000LL;
+    static constexpr size_t inputQueueCapacity = kPointCloudQosDepth;
 
     dsw_lio_sam::msg::CloudInfo cloudInfo;
     std_msgs::msg::Header cloudHeader;
@@ -39,97 +43,136 @@ public:
     std::vector<float> cloudCurvature;
     std::vector<int> cloudNeighborPicked;
     std::vector<int> cloudLabel;
-
+    
+    // ROS通信部分
     FeatureExtraction(const rclcpp::NodeOptions & options) :
         ParamServer("dsw_lio_sam_featureExtraction", options)
     {
-        subLaserCloudInfo = create_subscription<dsw_lio_sam::msg::CloudInfo>(
-            "dsw_lio_sam/deskew/cloud_info", qos,
+        subLaserCloudInfo = create_subscription<dsw_lio_sam::msg::CloudInfo>(  // 输入1：subLaserCloudInfo
+            "dsw_lio_sam/deskew/cloud_info", qos_point_cloud_pipeline,  // 订阅：/deskew/cloud_info
             std::bind(&FeatureExtraction::laserCloudInfoHandler, this, std::placeholders::_1));
-        subDeskewedCloud = create_subscription<sensor_msgs::msg::PointCloud2>(
-            "dsw_lio_sam/deskew/cloud_deskewed", rclcpp::QoS(5),
+        subDeskewedCloud = create_subscription<sensor_msgs::msg::PointCloud2>(  // 输入2：subDeskewedCloud
+            "dsw_lio_sam/deskew/cloud_deskewed", qos_point_cloud_pipeline,  // 订阅：/deskew/cloud_deskewed
             std::bind(&FeatureExtraction::deskewedCloudHandler, this, std::placeholders::_1));
 
         pubLaserCloudInfo = create_publisher<dsw_lio_sam::msg::CloudInfo>(
-            "dsw_lio_sam/feature/cloud_info", qos);
-        pubCornerPoints = create_publisher<sensor_msgs::msg::PointCloud2>(
-            "dsw_lio_sam/feature/cloud_corner", 1);
-        pubSurfacePoints = create_publisher<sensor_msgs::msg::PointCloud2>(
-            "dsw_lio_sam/feature/cloud_surface", 1);
+            "dsw_lio_sam/feature/cloud_info", qos_point_cloud_pipeline);
+        pubCornerPoints = create_publisher<sensor_msgs::msg::PointCloud2>(  // 输出角点：pubCornerPoints
+            "dsw_lio_sam/feature/cloud_corner", 1);  // 发布：feature/cloud_corner
+        pubSurfacePoints = create_publisher<sensor_msgs::msg::PointCloud2>(  // 输出面点：pubSurfacePoints
+            "dsw_lio_sam/feature/cloud_surface", 1);  // 发布：feature/cloud_surface
 
         initializationValue();
     }
 
+    // 点云类型  x、y、z、intensity、label
     void initializationValue()
     {
         cloudSmoothness.resize(N_SCAN*Horizon_SCAN);
 
         extractedCloud.reset(new pcl::PointCloud<PointType>());
-        cornerCloud.reset(new pcl::PointCloud<PointTypeL>());
-        surfaceCloud.reset(new pcl::PointCloud<PointTypeL>());
+        cornerCloud.reset(new pcl::PointCloud<PointTypeL>());  // 角点
+        surfaceCloud.reset(new pcl::PointCloud<PointTypeL>());  // 面点
 
         cloudCurvature.assign(N_SCAN*Horizon_SCAN, 0.0f);
         cloudNeighborPicked.assign(N_SCAN*Horizon_SCAN, 0);
         cloudLabel.assign(N_SCAN*Horizon_SCAN, 0);
     }
 
+    // 语义动态物体判断
     // DSW-LIO-SAM: 判断某个点是否属于动态物体（角点/面点提取共用，遵循 DRY）
     bool isDynamicLabel(int ind)
     {
         if (!semanticEnabled)
-            return false;
+            return false;  // 如果关闭语义：所有点认为静态。保持：LIO-SAM原始效果。
         if (cloudInfo.point_semantic_labels.size() <= static_cast<unsigned>(ind))
             return false;
-        const uint32_t label = cloudInfo.point_semantic_labels[ind];
+        const uint32_t label = cloudInfo.point_semantic_labels[ind];  // 获取标签。
         return label == static_cast<uint32_t>(SemanticLabel::CAR)   ||
                label == static_cast<uint32_t>(SemanticLabel::TRUCK) ||
                label == static_cast<uint32_t>(SemanticLabel::BUS)   ||
                label == static_cast<uint32_t>(SemanticLabel::PERSON)||
                label == static_cast<uint32_t>(SemanticLabel::BICYCLE)||
-               label == static_cast<uint32_t>(SemanticLabel::MOTORCYCLE);
+               label == static_cast<uint32_t>(SemanticLabel::MOTORCYCLE);  // 这些类别认为是动态 → 删除
     }
 
-    void deskewedCloudHandler(const sensor_msgs::msg::PointCloud2::SharedPtr msgIn)
+    void deskewedCloudHandler(const sensor_msgs::msg::PointCloud2::SharedPtr msgIn)  // 缓存去畸变点云
     {
-        std::lock_guard<std::mutex> lock(deskewedCloudLock);
-        deskewedCloudQueue.push_back(*msgIn);
-        while (deskewedCloudQueue.size() > 5)
-            deskewedCloudQueue.pop_front();
+        {
+            std::lock_guard<std::mutex> lock(inputQueueLock);
+            deskewedCloudQueue.push_back(*msgIn);
+            while (deskewedCloudQueue.size() > inputQueueCapacity)
+                deskewedCloudQueue.pop_front();
+        }
+        processQueuedFrames();
     }
 
-    bool cacheDeskewedCloud(const std_msgs::msg::Header& header)
+    void laserCloudInfoHandler(const dsw_lio_sam::msg::CloudInfo::SharedPtr msgIn)
     {
-        std::lock_guard<std::mutex> lock(deskewedCloudLock);
-
-        if (deskewedCloudQueue.empty())
         {
-            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-                "Waiting for deskewed point cloud on /dsw_lio_sam/deskew/cloud_deskewed");
-            return false;
+            std::lock_guard<std::mutex> lock(inputQueueLock);
+            cloudInfoQueue.push_back(*msgIn);
+            while (cloudInfoQueue.size() > inputQueueCapacity)
+                cloudInfoQueue.pop_front();
         }
+        processQueuedFrames();
+    }
 
-        const double infoTime = stamp2Sec(header.stamp);
-        while (!deskewedCloudQueue.empty() &&
-               stamp2Sec(deskewedCloudQueue.front().header.stamp) < infoTime - 0.02)
-        {
-            deskewedCloudQueue.pop_front();
+    void processQueuedFrames()
+    {
+        while (true) {
+            sensor_msgs::msg::PointCloud2 deskewedMsg;
+            dsw_lio_sam::msg::CloudInfo infoMsg;
+            bool matched = false;
+
+            {
+                std::lock_guard<std::mutex> lock(inputQueueLock);
+                while (!deskewedCloudQueue.empty() && !cloudInfoQueue.empty()) {
+                    const int64_t cloudStampNs =
+                        stampToNanoseconds(deskewedCloudQueue.front().header.stamp);
+                    const int64_t infoStampNs =
+                        stampToNanoseconds(cloudInfoQueue.front().header.stamp);
+                    const int64_t diffNs = cloudStampNs >= infoStampNs
+                        ? cloudStampNs - infoStampNs
+                        : infoStampNs - cloudStampNs;
+
+                    if (diffNs <= inputTimeToleranceNs) {
+                        deskewedMsg = std::move(deskewedCloudQueue.front());
+                        infoMsg = std::move(cloudInfoQueue.front());
+                        deskewedCloudQueue.pop_front();
+                        cloudInfoQueue.pop_front();
+                        matched = true;
+                        break;
+                    }
+
+                    if (cloudStampNs < infoStampNs) {
+                        RCLCPP_WARN_THROTTLE(
+                            get_logger(), *get_clock(), 2000,
+                            "Dropping deskewed cloud without matching cloud_info: stamp=%lld",
+                            static_cast<long long>(cloudStampNs));
+                        deskewedCloudQueue.pop_front();
+                    } else {
+                        RCLCPP_WARN_THROTTLE(
+                            get_logger(), *get_clock(), 2000,
+                            "Dropping cloud_info without matching deskewed cloud: stamp=%lld",
+                            static_cast<long long>(infoStampNs));
+                        cloudInfoQueue.pop_front();
+                    }
+                }
+            }
+
+            if (!matched)
+                return;
+
+            cloudInfo = std::move(infoMsg);
+            cloudHeader = cloudInfo.header;
+            pcl::fromROSMsg(deskewedMsg, *extractedCloud);
+
+            calculateSmoothness();
+            markOccludedPoints();
+            extractFeatures();
+            publishFeatureCloud();
         }
-
-        if (deskewedCloudQueue.empty())
-            return false;
-
-        const double cloudTime = stamp2Sec(deskewedCloudQueue.front().header.stamp);
-        if (std::abs(cloudTime - infoTime) > 0.02)
-        {
-            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-                "Deskewed cloud and cloud_info are not synchronized: cloud=%.6f info=%.6f",
-                cloudTime, infoTime);
-            return false;
-        }
-
-        pcl::fromROSMsg(deskewedCloudQueue.front(), *extractedCloud);
-        deskewedCloudQueue.pop_front();
-        return true;
     }
 
     uint32_t semanticLabelAt(size_t ind) const
@@ -139,24 +182,7 @@ public:
         return static_cast<uint32_t>(SemanticLabel::UNKNOWN);
     }
 
-    void laserCloudInfoHandler(const dsw_lio_sam::msg::CloudInfo::SharedPtr msgIn)
-    {
-        cloudInfo = *msgIn;
-        cloudHeader = msgIn->header;
-        if (!cacheDeskewedCloud(cloudHeader))
-            return;
-
-        calculateSmoothness();
-
-        markOccludedPoints();
-
-        extractFeatures();
-
-        publishFeatureCloud();
-    }
-
-
-    void calculateSmoothness()
+    void calculateSmoothness()  // 计算点曲率
     {
         int cloudSize = extractedCloud->points.size();
         for (int i = 5; i < cloudSize - 5; i++)
@@ -178,7 +204,7 @@ public:
         }
     }
 
-    void markOccludedPoints()
+    void markOccludedPoints()  // 遮挡点
     {
         int cloudSize = extractedCloud->points.size();
         // mark occluded points and parallel beam points
@@ -215,10 +241,10 @@ public:
         }
     }
 
-    void extractFeatures()
+    void extractFeatures()  // 核心
     {
         cornerCloud->clear();
-        surfaceCloud->clear();
+        surfaceCloud->clear();  // 清空
 
         pcl::PointCloud<PointTypeL>::Ptr surfaceCloudScan(new pcl::PointCloud<PointTypeL>());
         pcl::PointCloud<PointTypeL>::Ptr surfaceCloudScanDS(new pcl::PointCloud<PointTypeL>());
@@ -228,7 +254,7 @@ public:
         {
             surfaceCloudScan->clear();
 
-            for (int j = 0; j < 6; j++)
+            for (int j = 0; j < 6; j++)  // 每条scan分6段  目的：避免特征集中
             {
 
                 int sp = (cloudInfo.start_ring_index[i] * (6 - j) + cloudInfo.end_ring_index[i] * j) / 6;
@@ -240,14 +266,15 @@ public:
                 std::sort(cloudSmoothness.begin()+sp, cloudSmoothness.begin()+ep, by_value());
 
                 int largestPickedNum = 0;
-                for (int k = ep; k >= sp; k--)
+                for (int k = ep; k >= sp; k--)  // 角点提取
                 {
                     int ind = cloudSmoothness[k].ind;
                     // DSW-LIO-SAM: 跳过动态物体的角点
-                    bool isDynamic = isDynamicLabel(ind);
-
-                    if (cloudNeighborPicked[ind] == 0 && cloudCurvature[ind] > edgeThreshold && !isDynamic)
-
+                    // bool isDynamic = isDynamicLabel(ind);
+                    // if (cloudNeighborPicked[ind] == 0 && cloudCurvature[ind] > edgeThreshold && !isDynamic)  // 高曲率 非动态
+                    
+                    // 取消!isDynamic的硬删除
+                    if (cloudNeighborPicked[ind] == 0 && cloudCurvature[ind] > edgeThreshold)
                     {
                         largestPickedNum++;
                         if (largestPickedNum <= 20){
@@ -282,14 +309,15 @@ public:
                     }
                 }
 
-                for (int k = sp; k <= ep; k++)
+                for (int k = sp; k <= ep; k++)  // 面点提取
                 {
                     int ind = cloudSmoothness[k].ind;
                     // DSW-LIO-SAM: 跳过动态物体的面点
-                    bool isDynamicSurf = isDynamicLabel(ind);
+                    // bool isDynamicSurf = isDynamicLabel(ind);
+                    // if (cloudNeighborPicked[ind] == 0 && cloudCurvature[ind] < surfThreshold && !isDynamicSurf)
 
-                    if (cloudNeighborPicked[ind] == 0 && cloudCurvature[ind] < surfThreshold && !isDynamicSurf)
-
+                    // 取消!isDynamic的硬删除
+                    if (cloudNeighborPicked[ind] == 0 && cloudCurvature[ind] < surfThreshold)
                     {
                         cloudLabel[ind] = -1;
                         cloudNeighborPicked[ind] = 1;
@@ -327,7 +355,11 @@ public:
             }
 
             surfaceCloudScanDS->clear();
-            voxelDownsampleSemanticCloud(surfaceCloudScan, *surfaceCloudScanDS, odometrySurfLeafSize);
+            voxelDownsampleExperimentCloud(
+                surfaceCloudScan,
+                *surfaceCloudScanDS,
+                odometrySurfLeafSize,
+                originalLioSamMode);  // original 使用 PCL 质心，DSW 保留语义标签
 
             *surfaceCloud += *surfaceCloudScanDS;
         }
@@ -345,13 +377,13 @@ public:
 
     }
 
-    void publishFeatureCloud()
+    void publishFeatureCloud()  // 发布cornerCloud给MapOptimization
     {
         // free cloud info memory
         freeCloudInfoMemory();
 
         // save newly extracted features
-        // DSW-LIO-SAM: 手动转换并发布带语义的特征点云
+        // ===== DSW-LIO-SAM: 手动转换并发布带语义的特征点云 =====
         sensor_msgs::msg::PointCloud2 cornerMsg, surfMsg;
         pcl::toROSMsg(*cornerCloud, cornerMsg);
         cornerMsg.header.stamp = cloudHeader.stamp;

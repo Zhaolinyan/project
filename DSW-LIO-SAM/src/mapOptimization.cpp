@@ -56,12 +56,12 @@ POINT_CLOUD_REGISTER_POINT_STRUCT (PointXYZIRPYT,
 typedef PointXYZIRPYT  PointTypePose;
 
 
-class mapOptimization : public ParamServer
+class mapOptimization : public ParamServer  // 类成员变量
 {
 
 public:
 
-    // gtsam
+    // gtsam  作用：维护整个因子图
     NonlinearFactorGraph gtSAMgraph;
     Values initialEstimate;
     Values optimizedEstimate;
@@ -93,11 +93,13 @@ public:
     vector<pcl::PointCloud<PointType>::Ptr> cornerCloudKeyFrames;
     vector<pcl::PointCloud<PointType>::Ptr> surfCloudKeyFrames;
     
+    // KeyFrame  作用：保存历史关键帧位姿
     pcl::PointCloud<PointType>::Ptr cloudKeyPoses3D;
     pcl::PointCloud<PointTypePose>::Ptr cloudKeyPoses6D;
     pcl::PointCloud<PointType>::Ptr copy_cloudKeyPoses3D;
     pcl::PointCloud<PointTypePose>::Ptr copy_cloudKeyPoses6D;
 
+    // 当前帧特征
     pcl::PointCloud<PointTypeL>::Ptr laserCloudCornerLast;
     pcl::PointCloud<PointTypeL>::Ptr laserCloudSurfLast;
     pcl::PointCloud<PointTypeL>::Ptr laserCloudCornerLastDS;
@@ -108,18 +110,18 @@ public:
 
     std::vector<PointType> laserCloudOriCornerVec; // corner point holder for parallel computation
     std::vector<PointType> coeffSelCornerVec;
-    std::vector<bool> laserCloudOriCornerFlag;
+    std::vector<uint8_t> laserCloudOriCornerFlag;
     std::vector<PointType> laserCloudOriSurfVec; // surf point holder for parallel computation
     std::vector<PointType> coeffSelSurfVec;
-    std::vector<bool> laserCloudOriSurfFlag;
+    std::vector<uint8_t> laserCloudOriSurfFlag;
 
     std::vector<float> pointWeights;  // DSW-LIO-SAM: 合并后的优化权重
 
+    // 语义权重变量  表示：最终用于LM优化的权重
     // ===== DSW-LIO-SAM: 语义权重向量 =====
-    std::vector<float> laserCloudOriCornerWeights;
-    std::vector<float> laserCloudOriSurfWeights;
+    std::vector<float> laserCloudOriCornerWeights;  // 角点
+    std::vector<float> laserCloudOriSurfWeights;    // 面点
     // ===== DSW-LIO-SAM 结束 =====
-
 
     map<int, pair<pcl::PointCloud<PointType>, pcl::PointCloud<PointType>>> laserCloudMapContainer;
     pcl::PointCloud<PointType>::Ptr laserCloudCornerFromMap;
@@ -170,25 +172,22 @@ public:
     Eigen::Affine3f incrementalOdometryAffineFront;
     Eigen::Affine3f incrementalOdometryAffineBack;
 
-    std::unique_ptr<tf2_ros::TransformBroadcaster> br;
-
+    // 初始化ISAM2
     mapOptimization(const rclcpp::NodeOptions & options) : ParamServer("dsw_lio_sam_mapOptimization", options)
     {
         ISAM2Params parameters;
-        parameters.relinearizeThreshold = 0.1;
+        parameters.relinearizeThreshold = 0.1;  // 表示：优化收敛阈值
         parameters.relinearizeSkip = 1;
         isam = std::make_unique<ISAM2>(parameters);
 
         pubKeyPoses = create_publisher<sensor_msgs::msg::PointCloud2>("dsw_lio_sam/mapping/trajectory", 1);
         pubLaserCloudSurround = create_publisher<sensor_msgs::msg::PointCloud2>("dsw_lio_sam/mapping/map_global", 1);
-        pubLaserOdometryGlobal = create_publisher<nav_msgs::msg::Odometry>("dsw_lio_sam/mapping/odometry", qos);
+        pubLaserOdometryGlobal = create_publisher<nav_msgs::msg::Odometry>("dsw_lio_sam/mapping/odometry", qos);  // 创建Publisher  发布：轨迹
         pubLaserOdometryIncremental = create_publisher<nav_msgs::msg::Odometry>(
             "dsw_lio_sam/mapping/odometry_incremental", qos);
         pubPath = create_publisher<nav_msgs::msg::Path>("dsw_lio_sam/mapping/path", 1);
-        br = std::make_unique<tf2_ros::TransformBroadcaster>(this);
-
-        subCloud = create_subscription<dsw_lio_sam::msg::CloudInfo>(
-            "dsw_lio_sam/feature/cloud_info", qos,
+        subCloud = create_subscription<dsw_lio_sam::msg::CloudInfo>(  // 创建Subscriber  订阅：FeatureExtraction输出
+            "dsw_lio_sam/feature/cloud_info", qos_point_cloud_pipeline,
             std::bind(&mapOptimization::laserCloudInfoHandler, this, std::placeholders::_1));
         subGPS = create_subscription<nav_msgs::msg::Odometry>(
             gpsTopic, 200,
@@ -322,14 +321,15 @@ public:
         laserCloudOriSurfWeights.resize(N_SCAN * Horizon_SCAN);
 
 
-        std::fill(laserCloudOriCornerFlag.begin(), laserCloudOriCornerFlag.end(), false);
-        std::fill(laserCloudOriSurfFlag.begin(), laserCloudOriSurfFlag.end(), false);
+        std::fill(laserCloudOriCornerFlag.begin(), laserCloudOriCornerFlag.end(), uint8_t{0});
+        std::fill(laserCloudOriSurfFlag.begin(), laserCloudOriSurfFlag.end(), uint8_t{0});
 
         laserCloudCornerFromMap.reset(new pcl::PointCloud<PointType>());
         laserCloudSurfFromMap.reset(new pcl::PointCloud<PointType>());
         laserCloudCornerFromMapDS.reset(new pcl::PointCloud<PointType>());
         laserCloudSurfFromMapDS.reset(new pcl::PointCloud<PointType>());
 
+        // KDTree  作用：扫描地图
         kdtreeCornerFromMap.reset(new pcl::KdTreeFLANN<PointType>());
         kdtreeSurfFromMap.reset(new pcl::KdTreeFLANN<PointType>());
 
@@ -466,8 +466,9 @@ public:
             return;
         }
         try {
-            pcl::io::savePCDFileASCII(saveDir + "trajectory.pcd", *cloudKeyPoses3D);
-            pcl::io::savePCDFileASCII(saveDir + "transformations.pcd", *cloudKeyPoses6D);
+            pcl::io::savePCDFileBinary(saveDir + "trajectory.pcd", *cloudKeyPoses3D);
+            // ASCII PCD rounds epoch-sized doubles and destroys sub-second timestamps.
+            pcl::io::savePCDFileBinary(saveDir + "transformations.pcd", *cloudKeyPoses6D);
             pcl::PointCloud<PointType>::Ptr globalCornerCloud(new pcl::PointCloud<PointType>());
             pcl::PointCloud<PointType>::Ptr globalCornerCloudDS(new pcl::PointCloud<PointType>());
             pcl::PointCloud<PointType>::Ptr globalSurfCloud(new pcl::PointCloud<PointType>());
@@ -1015,12 +1016,20 @@ public:
     {
         // Downsample cloud from current scan
         laserCloudCornerLastDS->clear();
-        voxelDownsampleSemanticCloud(laserCloudCornerLast, *laserCloudCornerLastDS, mappingCornerLeafSize);
+        voxelDownsampleExperimentCloud(
+            laserCloudCornerLast,
+            *laserCloudCornerLastDS,
+            mappingCornerLeafSize,
+            originalLioSamMode);
         laserCloudCornerLastDSNum = laserCloudCornerLastDS->size();
 
 
         laserCloudSurfLastDS->clear();
-        voxelDownsampleSemanticCloud(laserCloudSurfLast, *laserCloudSurfLastDS, mappingSurfLeafSize);
+        voxelDownsampleExperimentCloud(
+            laserCloudSurfLast,
+            *laserCloudSurfLastDS,
+            mappingSurfLeafSize,
+            originalLioSamMode);
         laserCloudSurfLastDSNum = laserCloudSurfLastDS->size();
 
     }
@@ -1034,7 +1043,14 @@ public:
     {
         if (!semanticEnabled || semanticWeightAlpha <= 0.0f)
             return 0.0f;
+
         return semanticWeightAlpha * semanticDegeneracyScore;
+    }
+
+    float semanticWeightForLabel(uint32_t label) const
+    {
+        return computeSemanticWeight(
+            static_cast<SemanticLabel>(label), semanticAlphaForCurrentIteration());
     }
 
     void cornerOptimization()
@@ -1126,22 +1142,17 @@ public:
                     coeff.intensity = s * ld2;
 
                     if (s > 0.1) {
-                    PointType pointOriVec;
-                    pointOriVec.x = pointOri.x;
-                    pointOriVec.y = pointOri.y;
-                    pointOriVec.z = pointOri.z;
-                    pointOriVec.intensity = pointOri.intensity;
-                    laserCloudOriCornerVec[i] = pointOriVec;
-                    coeffSelCornerVec[i] = coeff;
-                    laserCloudOriCornerFlag[i] = true;
-                    
-                    // ===== DSW-LIO-SAM: 计算并存储语义权重 =====
-                    float alphaEff = semanticAlphaForCurrentIteration();
-                    laserCloudOriCornerWeights[i] = computeSemanticWeight(
-                        static_cast<SemanticLabel>(pointOri.label),
-                        alphaEff);
-                    // ===== DSW-LIO-SAM 结束 =====
-                }
+                        PointType pointOriVec;
+                        pointOriVec.x = pointOri.x;
+                        pointOriVec.y = pointOri.y;
+                        pointOriVec.z = pointOri.z;
+                        pointOriVec.intensity = pointOri.intensity;
+                        laserCloudOriCornerVec[i] = pointOriVec;
+                        coeffSelCornerVec[i] = coeff;
+                        laserCloudOriCornerWeights[i] =
+                            semanticWeightForLabel(pointOri.label);
+                        laserCloudOriCornerFlag[i] = uint8_t{1};
+                    }
 
                 }
             }
@@ -1223,14 +1234,10 @@ public:
                         pointOriVec.intensity = pointOri.intensity;
                         laserCloudOriSurfVec[i] = pointOriVec;
                         coeffSelSurfVec[i] = coeff;
-                        laserCloudOriSurfFlag[i] = true;
+                        laserCloudOriSurfFlag[i] = uint8_t{1};
                         
-                        // ===== DSW-LIO-SAM: 计算并存储语义权重 =====
-                        float alphaEff = semanticAlphaForCurrentIteration();
-                        laserCloudOriSurfWeights[i] = computeSemanticWeight(
-                            static_cast<SemanticLabel>(pointOri.label),
-                            alphaEff);
-                        // ===== DSW-LIO-SAM 结束 =====
+                        laserCloudOriSurfWeights[i] =
+                            semanticWeightForLabel(pointOri.label);
                     }
 
                 }
@@ -1238,33 +1245,134 @@ public:
         }
     }
 
-    void combineOptimizationCoeffs()
+    void combineOptimizationCoeffs()  // 把 角点Point、Residual 和 面点Point、Residual全部放一起。
     {
         pointWeights.clear();
+        pointWeights.reserve(laserCloudCornerLastDSNum + laserCloudSurfLastDSNum);
         
         // combine corner coeffs
         for (int i = 0; i < laserCloudCornerLastDSNum; ++i){
-            if (laserCloudOriCornerFlag[i] == true){
+            if (laserCloudOriCornerFlag[i] != uint8_t{0}){
                 laserCloudOri->push_back(laserCloudOriCornerVec[i]);
                 coeffSel->push_back(coeffSelCornerVec[i]);
-                pointWeights.push_back(laserCloudOriCornerWeights[i]);
+                pointWeights.push_back(laserCloudOriCornerWeights[i]);  // semantic weight也是从这里统一进入优化系统。
             }
         }
         // combine surf coeffs
         for (int i = 0; i < laserCloudSurfLastDSNum; ++i){
-            if (laserCloudOriSurfFlag[i] == true){
+            if (laserCloudOriSurfFlag[i] != uint8_t{0}){
                 laserCloudOri->push_back(laserCloudOriSurfVec[i]);
                 coeffSel->push_back(coeffSelSurfVec[i]);
                 pointWeights.push_back(laserCloudOriSurfWeights[i]);
             }
         }
         // reset flag for next iteration
-        std::fill(laserCloudOriCornerFlag.begin(), laserCloudOriCornerFlag.end(), false);
-        std::fill(laserCloudOriSurfFlag.begin(), laserCloudOriSurfFlag.end(), false);
+        std::fill(laserCloudOriCornerFlag.begin(), laserCloudOriCornerFlag.end(), uint8_t{0});
+        std::fill(laserCloudOriSurfFlag.begin(), laserCloudOriSurfFlag.end(), uint8_t{0});
     }
 
 
-    bool LMOptimization(int iterCount)
+    bool LMOptimizationOriginal(int iterCount)
+    {
+        const float srx = sin(transformTobeMapped[1]);
+        const float crx = cos(transformTobeMapped[1]);
+        const float sry = sin(transformTobeMapped[2]);
+        const float cry = cos(transformTobeMapped[2]);
+        const float srz = sin(transformTobeMapped[0]);
+        const float crz = cos(transformTobeMapped[0]);
+
+        const int laserCloudSelNum = laserCloudOri->size();
+        if (laserCloudSelNum < 50)
+            return false;
+
+        cv::Mat matA(laserCloudSelNum, 6, CV_32F, cv::Scalar::all(0));
+        cv::Mat matB(laserCloudSelNum, 1, CV_32F, cv::Scalar::all(0));
+        PointType pointOri, coeff;
+
+        for (int i = 0; i < laserCloudSelNum; ++i) {
+            pointOri.x = laserCloudOri->points[i].y;
+            pointOri.y = laserCloudOri->points[i].z;
+            pointOri.z = laserCloudOri->points[i].x;
+            coeff.x = coeffSel->points[i].y;
+            coeff.y = coeffSel->points[i].z;
+            coeff.z = coeffSel->points[i].x;
+            coeff.intensity = coeffSel->points[i].intensity;
+
+            const float arx =
+                (crx*sry*srz*pointOri.x + crx*crz*sry*pointOri.y - srx*sry*pointOri.z) * coeff.x
+              + (-srx*srz*pointOri.x - crz*srx*pointOri.y - crx*pointOri.z) * coeff.y
+              + (crx*cry*srz*pointOri.x + crx*cry*crz*pointOri.y - cry*srx*pointOri.z) * coeff.z;
+            const float ary =
+                ((cry*srx*srz - crz*sry)*pointOri.x
+              + (sry*srz + cry*crz*srx)*pointOri.y + crx*cry*pointOri.z) * coeff.x
+              + ((-cry*crz - srx*sry*srz)*pointOri.x
+              + (cry*srz - crz*srx*sry)*pointOri.y - crx*sry*pointOri.z) * coeff.z;
+            const float arz =
+                ((crz*srx*sry - cry*srz)*pointOri.x
+              + (-cry*crz - srx*sry*srz)*pointOri.y) * coeff.x
+              + (crx*crz*pointOri.x - crx*srz*pointOri.y) * coeff.y
+              + ((sry*srz + cry*crz*srx)*pointOri.x
+              + (crz*sry - cry*srx*srz)*pointOri.y) * coeff.z;
+
+            float* row = matA.ptr<float>(i);
+            row[0] = arz;
+            row[1] = arx;
+            row[2] = ary;
+            row[3] = coeff.z;
+            row[4] = coeff.x;
+            row[5] = coeff.y;
+            matB.at<float>(i, 0) = -coeff.intensity;
+        }
+
+        const cv::Mat matAt = matA.t();
+        const cv::Mat matAtA = matAt * matA;
+        const cv::Mat matAtB = matAt * matB;
+        cv::Mat matX(6, 1, CV_32F, cv::Scalar::all(0));
+        cv::solve(matAtA, matAtB, matX, cv::DECOMP_QR);
+
+        if (iterCount == 0) {
+            cv::Mat matE(1, 6, CV_32F, cv::Scalar::all(0));
+            cv::Mat matV(6, 6, CV_32F, cv::Scalar::all(0));
+            cv::Mat matV2(6, 6, CV_32F, cv::Scalar::all(0));
+            cv::eigen(matAtA, matE, matV);
+            matV.copyTo(matV2);
+
+            const float eigenThreshold[6] = {100, 100, 100, 100, 100, 100};
+            isDegenerate = false;
+            for (int i = 5; i >= 0; --i) {
+                if (matE.at<float>(0, i) < eigenThreshold[i]) {
+                    for (int j = 0; j < 6; ++j)
+                        matV2.at<float>(i, j) = 0;
+                    isDegenerate = true;
+                } else {
+                    break;
+                }
+            }
+            matP = matV.inv() * matV2;
+            degeneracyScore = isDegenerate ? 1.0f : 0.0f;
+            semanticDegeneracyScore = degeneracyScore;
+        }
+
+        if (isDegenerate) {
+            const cv::Mat matX2 = matX.clone();
+            matX = matP * matX2;
+        }
+
+        for (int i = 0; i < 6; ++i)
+            transformTobeMapped[i] += matX.at<float>(i, 0);
+
+        const float deltaR = std::sqrt(
+            std::pow(pcl::rad2deg(matX.at<float>(0, 0)), 2) +
+            std::pow(pcl::rad2deg(matX.at<float>(1, 0)), 2) +
+            std::pow(pcl::rad2deg(matX.at<float>(2, 0)), 2));
+        const float deltaT = std::sqrt(
+            std::pow(matX.at<float>(3, 0) * 100, 2) +
+            std::pow(matX.at<float>(4, 0) * 100, 2) +
+            std::pow(matX.at<float>(5, 0) * 100, 2));
+        return deltaR < 0.05f && deltaT < 0.05f;
+    }
+
+    bool LMOptimizationDsw(int iterCount)
     {
         // This optimization is from the original loam_velodyne by Ji Zhang, need to cope with coordinate transformation
         // lidar <- camera      ---     camera <- lidar
@@ -1287,13 +1395,18 @@ public:
         if (laserCloudSelNum < 50) {
             return false;
         }
+        if (pointWeights.size() != static_cast<size_t>(laserCloudSelNum)) {
+            RCLCPP_ERROR(
+                get_logger(),
+                "Semantic weight count mismatch: points=%d weights=%zu",
+                laserCloudSelNum, pointWeights.size());
+            return false;
+        }
 
-        cv::Mat matA(laserCloudSelNum, 6, CV_32F, cv::Scalar::all(0));
-        cv::Mat matAt(6, laserCloudSelNum, CV_32F, cv::Scalar::all(0));
-        cv::Mat matAtA(6, 6, CV_32F, cv::Scalar::all(0));
-        cv::Mat matB(laserCloudSelNum, 1, CV_32F, cv::Scalar::all(0));
-        cv::Mat matAtB(6, 1, CV_32F, cv::Scalar::all(0));
-        cv::Mat matX(6, 1, CV_32F, cv::Scalar::all(0));
+        cv::Mat matA(laserCloudSelNum, 6, CV_64F, cv::Scalar::all(0));
+        cv::Mat matAGeometry(laserCloudSelNum, 6, CV_64F, cv::Scalar::all(0));
+        cv::Mat matB(laserCloudSelNum, 1, CV_64F, cv::Scalar::all(0));
+        cv::Mat matX(6, 1, CV_64F, cv::Scalar::all(0));
         PointType pointOri, coeff;
 
         for (int i = 0; i < laserCloudSelNum; i++) {
@@ -1321,46 +1434,57 @@ public:
                       + ((sry*srz + cry*crz*srx)*pointOri.x + (crz*sry-cry*srx*srz)*pointOri.y)*coeff.z;
             // lidar -> camera
             // 使用行指针直接访问，避免 cv::Mat::at 的逐元素边界检查（热循环性能优化）
-            float* matAptr = matA.ptr<float>(i);
-            float* matBptr = matB.ptr<float>(i);
-            // ===== DSW-LIO-SAM: 应用语义权重 =====
-            float w = std::sqrt(pointWeights[i]);
-            matAptr[0] = arz * w;
-            matAptr[1] = arx * w;
-            matAptr[2] = ary * w;
-            matAptr[3] = coeff.z * w;
-            matAptr[4] = coeff.x * w;
-            matAptr[5] = coeff.y * w;
-            matBptr[0] = -coeff.intensity * w;
-            // ===== DSW-LIO-SAM 结束 =====
+            double* matAptr = matA.ptr<double>(i);
+            double* matBptr = matB.ptr<double>(i);
+            // sqrt(w) scales both J and r so J^T W J and J^T W r are formed.
+            const double sqrtWeight = std::sqrt(std::max(pointWeights[i], 0.05f));
+            double* geometryPtr = matAGeometry.ptr<double>(i);
+            geometryPtr[0] = arz;
+            geometryPtr[1] = arx;
+            geometryPtr[2] = ary;
+            geometryPtr[3] = coeff.z;
+            geometryPtr[4] = coeff.x;
+            geometryPtr[5] = coeff.y;
+            for (int column = 0; column < 6; ++column) {
+                matAptr[column] = geometryPtr[column] * sqrtWeight;
+            }
+            matBptr[0] = -coeff.intensity * sqrtWeight;
         }
 
-        cv::transpose(matA, matAt);
-        matAtA = matAt * matA;
-        matAtB = matAt * matB;
-        cv::solve(matAtA, matAtB, matX, cv::DECOMP_QR);
+        // Solve the weighted least-squares system directly. Forming A^T A
+        // squares the condition number and made weak scenes extremely unstable.
+        if (!cv::solve(matA, matB, matX, cv::DECOMP_SVD) ||
+            !cv::checkRange(matX)) {
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 2000,
+                "Scan-to-map linear solve failed; rejecting this optimization step.");
+            return true;
+        }
 
         if (iterCount == 0) {
 
-            cv::Mat matE(1, 6, CV_32F, cv::Scalar::all(0));
-            cv::Mat matV(6, 6, CV_32F, cv::Scalar::all(0));
-            cv::Mat matV2(6, 6, CV_32F, cv::Scalar::all(0));
+            cv::Mat matE(1, 6, CV_64F, cv::Scalar::all(0));
+            cv::Mat matV(6, 6, CV_64F, cv::Scalar::all(0));
+            cv::Mat matV2(6, 6, CV_64F, cv::Scalar::all(0));
 
-            cv::eigen(matAtA, matE, matV);
+            // Observability is determined by geometry, not semantic confidence.
+            // A weighted Hessian can lift weak modes above the fixed threshold.
+            cv::Mat matAtAGeometry = matAGeometry.t() * matAGeometry;
+            cv::eigen(matAtAGeometry, matE, matV);
             matV.copyTo(matV2);
 
             // ===== DSW-LIO-SAM: 连续退化分数（替代二值 isDegenerate）=====
-            float eignThre[6] = {100, 100, 100, 100, 100, 100};
+            double eignThre[6] = {100, 100, 100, 100, 100, 100};
             int degenerateCount = 0;  // 退化的特征值个数
             float minEigenvalue = FLT_MAX;
 
             for (int i = 5; i >= 0; i--) {
-                if (matE.at<float>(0, i) < eignThre[i]) {
+                if (matE.at<double>(0, i) < eignThre[i]) {
                     for (int j = 0; j < 6; j++) {
-                        matV2.at<float>(i, j) = 0;
+                        matV2.at<double>(i, j) = 0;
                     }
                     degenerateCount++;
-                    minEigenvalue = std::min(minEigenvalue, matE.at<float>(0, i));
+                    minEigenvalue = std::min(minEigenvalue, static_cast<float>(matE.at<double>(0, i)));
                 } else {
                     break;
                 }
@@ -1370,14 +1494,15 @@ public:
             // 分数 = 退化维度数/6 × (1 - 最小特征值/阈值)
             if (degenerateCount > 0) {
                 float dimScore = static_cast<float>(degenerateCount) / 6.0f;
-                float eigenScore = 1.0f - std::min(minEigenvalue / eignThre[0], 1.0f);
+                float eigenScore = 1.0f - static_cast<float>(
+                    std::min(static_cast<double>(minEigenvalue) / eignThre[0], 1.0));
                 degeneracyScore = std::min(dimScore * 0.5f + eigenScore * 0.5f, 1.0f);
             } else {
                 degeneracyScore = 0.0f;
             }
-            semanticDegeneracyScore = degeneracyScore;
             isDegenerate = degenerateCount > 0;
             matP = matV.inv() * matV2;
+            semanticDegeneracyScore = degeneracyScore;
             // ===== DSW-LIO-SAM 结束 =====
 
         }
@@ -1385,28 +1510,35 @@ public:
         // ===== DSW-LIO-SAM: 退化时抑制不可靠方向的位姿更新 =====
         if (isDegenerate)
         {
-            cv::Mat matX2(6, 1, CV_32F, cv::Scalar::all(0));
+            cv::Mat matX2(6, 1, CV_64F, cv::Scalar::all(0));
             matX.copyTo(matX2);
             matX = matP * matX2;
         }
         // ===== DSW-LIO-SAM 结束 =====
 
 
-        transformTobeMapped[0] += matX.at<float>(0, 0);
-        transformTobeMapped[1] += matX.at<float>(1, 0);
-        transformTobeMapped[2] += matX.at<float>(2, 0);
-        transformTobeMapped[3] += matX.at<float>(3, 0);
-        transformTobeMapped[4] += matX.at<float>(4, 0);
-        transformTobeMapped[5] += matX.at<float>(5, 0);
+        const double deltaRRad = cv::norm(matX.rowRange(0, 3));
+        const double deltaTMeters = cv::norm(matX.rowRange(3, 6));
+        const double residualBefore = cv::norm(matB);
+        const double residualAfter = cv::norm(matA * matX - matB);
+        constexpr double maxIterationRotationRad = 10.0 * M_PI / 180.0;
+        constexpr double maxIterationTranslationMeters = 2.0;
+        if (!isPlausibleOptimizationStep(
+                deltaTMeters, deltaRRad, residualBefore, residualAfter,
+                maxIterationTranslationMeters, maxIterationRotationRad)) {
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 2000,
+                "Rejecting scan-to-map step: translation=%.3fm rotation=%.3fdeg residual=%.6g->%.6g",
+                deltaTMeters, pcl::rad2deg(deltaRRad), residualBefore, residualAfter);
+            return true;
+        }
 
-        float deltaR = sqrt(
-                            pow(pcl::rad2deg(matX.at<float>(0, 0)), 2) +
-                            pow(pcl::rad2deg(matX.at<float>(1, 0)), 2) +
-                            pow(pcl::rad2deg(matX.at<float>(2, 0)), 2));
-        float deltaT = sqrt(
-                            pow(matX.at<float>(3, 0) * 100, 2) +
-                            pow(matX.at<float>(4, 0) * 100, 2) +
-                            pow(matX.at<float>(5, 0) * 100, 2));
+        for (int i = 0; i < 6; ++i) {
+            transformTobeMapped[i] += static_cast<float>(matX.at<double>(i, 0));
+        }
+
+        const float deltaR = static_cast<float>(pcl::rad2deg(deltaRRad));
+        const float deltaT = static_cast<float>(deltaTMeters * 100.0);
 
         if (deltaR < 0.05 && deltaT < 0.05) {
             return true; // converged
@@ -1414,11 +1546,22 @@ public:
         return false; // keep optimizing
     }
 
-    void scan2MapOptimization()
+    bool LMOptimization(int iterCount)
+    {
+        return originalLioSamMode
+            ? LMOptimizationOriginal(iterCount)
+            : LMOptimizationDsw(iterCount);
+    }
+
+    void scan2MapOptimization()  // 整个 MapOptimization 最重要的函数
     {
         if (cloudKeyPoses3D->points.empty())
             return;
 
+        std::array<float, 6> transformBeforeOptimization{};
+        std::copy(
+            std::begin(transformTobeMapped), std::end(transformTobeMapped),
+            transformBeforeOptimization.begin());
         isDegenerate = false;
         degeneracyScore = 0.0f;
         semanticDegeneracyScore = 0.0f;
@@ -1443,6 +1586,36 @@ public:
                     !(semanticEnabled && semanticWeightAlpha > 0.0f &&
                       semanticDegeneracyScore > degeneracyThreshold && iterCount == 0))
                     break;              
+            }
+
+            const double frameTranslation = std::sqrt(
+                std::pow(transformTobeMapped[3] - transformBeforeOptimization[3], 2) +
+                std::pow(transformTobeMapped[4] - transformBeforeOptimization[4], 2) +
+                std::pow(transformTobeMapped[5] - transformBeforeOptimization[5], 2));
+            const auto wrappedAngleDifference = [](double current, double previous) {
+                const double difference = current - previous;
+                return std::atan2(std::sin(difference), std::cos(difference));
+            };
+            const double frameRotation = std::sqrt(
+                std::pow(wrappedAngleDifference(
+                    transformTobeMapped[0], transformBeforeOptimization[0]), 2) +
+                std::pow(wrappedAngleDifference(
+                    transformTobeMapped[1], transformBeforeOptimization[1]), 2) +
+                std::pow(wrappedAngleDifference(
+                    transformTobeMapped[2], transformBeforeOptimization[2]), 2));
+            constexpr double maxFrameTranslationMeters = 5.0;
+            constexpr double maxFrameRotationRad = 30.0 * M_PI / 180.0;
+            if (!originalLioSamMode &&
+                (!std::isfinite(frameTranslation) || !std::isfinite(frameRotation) ||
+                 frameTranslation > maxFrameTranslationMeters ||
+                 frameRotation > maxFrameRotationRad)) {
+                RCLCPP_WARN_THROTTLE(
+                    get_logger(), *get_clock(), 2000,
+                    "Rejecting scan-to-map frame correction: translation=%.3fm rotation=%.3fdeg",
+                    frameTranslation, pcl::rad2deg(frameRotation));
+                std::copy(
+                    transformBeforeOptimization.begin(), transformBeforeOptimization.end(),
+                    std::begin(transformTobeMapped));
             }
 
             transformUpdate();
@@ -1789,16 +1962,6 @@ public:
         laserOdometryROS.pose.pose.orientation = quat_msg;
         pubLaserOdometryGlobal->publish(laserOdometryROS);
 
-        // Publish TF
-        quat_tf.setRPY(transformTobeMapped[0], transformTobeMapped[1], transformTobeMapped[2]);
-        tf2::Transform t_odom_to_lidar = tf2::Transform(quat_tf, tf2::Vector3(transformTobeMapped[3], transformTobeMapped[4], transformTobeMapped[5]));
-        tf2::TimePoint time_point = tf2_ros::fromRclcpp(timeLaserInfoStamp);
-        tf2::Stamped<tf2::Transform> temp_odom_to_lidar(t_odom_to_lidar, time_point, odometryFrame);
-        geometry_msgs::msg::TransformStamped trans_odom_to_lidar;
-        tf2::convert(temp_odom_to_lidar, trans_odom_to_lidar);
-        trans_odom_to_lidar.child_frame_id = "lidar_link";
-        br->sendTransform(trans_odom_to_lidar);
-
         // Publish odometry for ROS (incremental)
         static bool lastIncreOdomPubFlag = false;
         static nav_msgs::msg::Odometry laserOdomIncremental; // incremental odometry msg
@@ -1846,9 +2009,9 @@ public:
             geometry_msgs::msg::Quaternion quat_msg;
             tf2::convert(quat_tf, quat_msg);
             laserOdomIncremental.pose.pose.orientation = quat_msg;
-            // ===== DSW-LIO-SAM: 发布连续退化指标（替代二值）=====
-            laserOdomIncremental.pose.covariance[0] = degeneracyScore;
-            // ===== DSW-LIO-SAM 结束 =====
+            // Original LIO-SAM 传递二值标志；DSW 传递连续退化分数。
+            laserOdomIncremental.pose.covariance[0] = packDegeneracyIndicator(
+                originalLioSamMode, isDegenerate, degeneracyScore);
 
         }
         pubLaserOdometryIncremental->publish(laserOdomIncremental);

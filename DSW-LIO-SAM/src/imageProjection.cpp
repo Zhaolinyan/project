@@ -1,14 +1,16 @@
+// 点云投影/预处理：接收点云→range image→提取语义标签
+
 #include "utility.hpp"
 #include "dsw_lio_sam/msg/cloud_info.hpp"
 #include <condition_variable>
 
-struct VelodynePointXYZIRT
+struct VelodynePointXYZIRT  // 点云类型定义  Velodyne格式
 {
-    PCL_ADD_POINT4D
-    PCL_ADD_INTENSITY;
-    uint16_t ring;
-    float time;
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    PCL_ADD_POINT4D                  // x,y,z  三维坐标
+    PCL_ADD_INTENSITY;               // intensity  反射强度
+    uint16_t ring;                   // ring  激光线编号
+    float time;                      // time  扫描时间
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW  // 
 } EIGEN_ALIGN16;
 POINT_CLOUD_REGISTER_POINT_STRUCT (VelodynePointXYZIRT,
     (float, x, x) (float, y, y) (float, z, z) (float, intensity, intensity)
@@ -36,7 +38,7 @@ using PointXYZIRT = VelodynePointXYZIRT;
 
 const int queueLength = 2000;
 
-class ImageProjection : public ParamServer
+class ImageProjection : public ParamServer  // ImageProjection类继承ParamServer
 {
 private:
 
@@ -93,23 +95,21 @@ private:
 
     vector<int> columnIdnCountVec;
 
-    // ===== DSW-LIO-SAM: 语义相关 =====
+    // ===== DSW-LIO-SAM: 语义相关部分 =====
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subSemanticCloud;
     rclcpp::CallbackGroup::SharedPtr callbackGroupSemantic;
-    std::deque<sensor_msgs::msg::PointCloud2> semanticCloudQueue;
+    std::deque<sensor_msgs::msg::PointCloud2> semanticCloudQueue;  // 语义缓存队列
     std::condition_variable semanticCv;
-    pcl::PointCloud<PointTypeL>::Ptr semanticCloudIn;  // 带语义标签的点云
-    std::vector<uint32_t> pointSemanticLabels;          // 当前帧每个点的语义标签
-    std::vector<float> pointSemanticWeights;            // 当前帧每个点的语义权重
+    pcl::PointCloud<PointTypeL>::Ptr semanticCloudIn;              // 带语义标签的点云  label来自Cylinder3D
+    std::vector<uint32_t> pointSemanticLabels;                     // 当前帧每个点的语义标签
+    std::vector<float> pointSemanticWeights;                       // 当前帧每个点的语义权重  核心创新！！！
     std::vector<uint32_t> fullCloudSemanticLabels;
     std::vector<float> fullCloudSemanticWeights;
-    static constexpr double semanticTimeTolerance = 0.12;  // seconds
-    static constexpr int semanticWaitTimeoutMs = 1000;
+    static constexpr int64_t semanticTimeToleranceNs = 1000000LL;  // 1 ms
+    static constexpr int semanticWaitTimeoutMs = 5000;
+    static constexpr size_t semanticQueueCapacity = kPointCloudQosDepth;
     static constexpr float semanticNearestSqDist = 0.05f * 0.05f;
-    // ===== DSW-LIO-SAM 结束 =====
-
-
-
+    // ===== DSW-LIO-SAM 语义部分结束 =====
 
 public:
     ImageProjection(const rclcpp::NodeOptions & options) :
@@ -144,25 +144,23 @@ public:
 
 
         pubExtractedCloud = create_publisher<sensor_msgs::msg::PointCloud2>(
-            "dsw_lio_sam/deskew/cloud_deskewed", 1);
+            "dsw_lio_sam/deskew/cloud_deskewed", qos_point_cloud_pipeline);
         pubLaserCloudInfo = create_publisher<dsw_lio_sam::msg::CloudInfo>(
-            "dsw_lio_sam/deskew/cloud_info", qos);
+            "dsw_lio_sam/deskew/cloud_info", qos_point_cloud_pipeline);
 
         // ===== DSW-LIO-SAM: 初始化语义模块 =====
-        if (semanticEnabled) {
+        if (semanticEnabled) {  // 构造函数：if (semanticEnabled)如果打开，创建订阅：subSemanticCloud，订阅：Cylinder3D输出topic
             callbackGroupSemantic = create_callback_group(
                 rclcpp::CallbackGroupType::MutuallyExclusive);
             auto semanticOpt = rclcpp::SubscriptionOptions();
             semanticOpt.callback_group = callbackGroupSemantic;
 
-            auto semanticQos = rclcpp::QoS(rclcpp::KeepLast(200)).best_effort();
             subSemanticCloud = create_subscription<sensor_msgs::msg::PointCloud2>(
-                semanticCloudTopic, semanticQos,
+                semanticCloudTopic, qos_point_cloud_pipeline,
                 std::bind(&ImageProjection::semanticCloudHandler, this, std::placeholders::_1),
                 semanticOpt);
         }
-        // ===== DSW-LIO-SAM 结束 =====
-
+        // ===== DSW-LIO-SAM 语义初始化结束 =====
 
         allocateMemory();
         resetParameters();
@@ -250,22 +248,22 @@ public:
     }
 
     // ===== DSW-LIO-SAM: 语义点云回调 =====
-    void semanticCloudHandler(const sensor_msgs::msg::PointCloud2::SharedPtr semanticCloudMsg)
+    void semanticCloudHandler(const sensor_msgs::msg::PointCloud2::SharedPtr semanticCloudMsg)  // 语义输入入口：收到Cylinder3D语义点云，存入semanticCloudQueue
     {
         {
             std::lock_guard<std::mutex> lock(semanticLock);
             semanticCloudQueue.push_back(*semanticCloudMsg);
-            while (semanticCloudQueue.size() > 50)
+            while (semanticCloudQueue.size() > semanticQueueCapacity)
                 semanticCloudQueue.pop_front();
         }
         semanticCv.notify_all();
     }
 
-    bool cacheSemanticCloud()
+    bool cacheSemanticCloud()  // 最关键函数
     {
         if (!semanticEnabled) {
             int cloudSize = laserCloudIn->points.size();
-            pointSemanticLabels.assign(cloudSize, static_cast<uint32_t>(SemanticLabel::UNKNOWN));
+            pointSemanticLabels.assign(cloudSize, static_cast<uint32_t>(SemanticLabel::UNKNOWN));  // 初始化
             pointSemanticWeights.assign(cloudSize, 1.0f);
             return true;
         }
@@ -275,37 +273,29 @@ public:
         pointSemanticWeights.assign(cloudSize, 1.0f);
         
         sensor_msgs::msg::PointCloud2 semanticMsg;
-        const double targetTime = stamp2Sec(cloudHeader.stamp);
+        const int64_t targetStampNs = stampToNanoseconds(cloudHeader.stamp);
         {
             std::unique_lock<std::mutex> lock(semanticLock);
 
             auto try_pop_synced_semantic = [&]() -> bool {
-                while (!semanticCloudQueue.empty() &&
-                       stamp2Sec(semanticCloudQueue.front().header.stamp) <
-                           targetTime - semanticTimeTolerance)
-                {
-                    semanticCloudQueue.pop_front();
-                }
+                semanticCloudQueue.erase(
+                    std::remove_if(
+                        semanticCloudQueue.begin(), semanticCloudQueue.end(),
+                        [&](const sensor_msgs::msg::PointCloud2& queued) {
+                            return stampToNanoseconds(queued.header.stamp) <
+                                   targetStampNs - semanticTimeToleranceNs;
+                        }),
+                    semanticCloudQueue.end());
 
-                size_t bestIndex = semanticCloudQueue.size();
-                double bestDiff = std::numeric_limits<double>::max();
-                for (size_t i = 0; i < semanticCloudQueue.size(); ++i)
-                {
-                    const double diff = std::abs(stamp2Sec(semanticCloudQueue[i].header.stamp) - targetTime);
-                    if (diff < bestDiff)
-                    {
-                        bestDiff = diff;
-                        bestIndex = i;
-                    }
-                }
-
-                if (bestIndex == semanticCloudQueue.size() || bestDiff > semanticTimeTolerance)
+                const auto bestIndex = findPointCloudByTimestamp(
+                    semanticCloudQueue, targetStampNs, semanticTimeToleranceNs);
+                if (!bestIndex)
                     return false;
 
-                semanticMsg = semanticCloudQueue[bestIndex];
+                semanticMsg = semanticCloudQueue[*bestIndex];
                 semanticCloudQueue.erase(
                     semanticCloudQueue.begin(),
-                    semanticCloudQueue.begin() + static_cast<std::ptrdiff_t>(bestIndex) + 1);
+                    semanticCloudQueue.begin() + static_cast<std::ptrdiff_t>(*bestIndex) + 1);
                 return true;
             };
 
@@ -323,156 +313,335 @@ public:
 
             if (!hasSyncedSemantic)
             {
-                double bestDiff = std::numeric_limits<double>::max();
+                int64_t bestDiffNs = std::numeric_limits<int64_t>::max();
                 for (const auto& queuedSemantic : semanticCloudQueue)
                 {
-                    const double diff = std::abs(stamp2Sec(queuedSemantic.header.stamp) - targetTime);
-                    if (diff < bestDiff)
-                        bestDiff = diff;
+                    const int64_t stampNs = stampToNanoseconds(queuedSemantic.header.stamp);
+                    const int64_t diffNs = stampNs >= targetStampNs
+                        ? stampNs - targetStampNs
+                        : targetStampNs - stampNs;
+                    bestDiffNs = std::min(bestDiffNs, diffNs);
                 }
 
                 if (semanticCloudQueue.empty())
                 {
                     RCLCPP_WARN_THROTTLE(
                         get_logger(), *get_clock(), 2000,
-                        "No synced semantic cloud for lidar stamp %.6f; semantic queue is empty after waiting %.1fs",
-                        targetTime, semanticWaitTimeoutMs / 1000.0);
+                        "No semantic cloud within 1 ms for lidar stamp %lld; queue is empty after waiting %.1fs",
+                        static_cast<long long>(targetStampNs), semanticWaitTimeoutMs / 1000.0);
                 }
                 else
                 {
                     RCLCPP_WARN_THROTTLE(
                         get_logger(), *get_clock(), 2000,
-                        "No synced semantic cloud for lidar stamp %.6f after waiting %.1fs; best diff %.3fs",
-                        targetTime, semanticWaitTimeoutMs / 1000.0, bestDiff);
+                        "No semantic cloud within 1 ms for lidar stamp %lld after waiting %.1fs; best diff %.3fms",
+                        static_cast<long long>(targetStampNs), semanticWaitTimeoutMs / 1000.0,
+                        bestDiffNs / 1000000.0);
                 }
                 return !requireSemanticCloud;
             }
         }
         
         // 取时间最近的一帧语义点云
-        pcl::fromROSMsg(semanticMsg, *semanticCloudIn);
+        pcl::fromROSMsg(semanticMsg, *semanticCloudIn);  // 时间同步
         
-        // 方法1（当前）：按索引匹配 - 只在点云完全对齐时有效
-        // 方法2（推荐）：对每个原始点，在语义点云中找最近邻
-        
-        // 这里先用简单方法：假设两个点云已时间同步且点数相同
-        // 正式版本你应该用 pcl::KdTreeFLANN 做最近邻搜索
-        int semanticSize = semanticCloudIn->points.size();
-        if (semanticSize == 0) {
-            if (requireSemanticCloud) {
-                RCLCPP_WARN_THROTTLE(
-                    get_logger(), *get_clock(), 2000,
-                    "Semantic cloud is required but the synced semantic cloud is empty.");
-                return false;
-            }
-            return true;
-        }
+        // 点数相同：按索引匹配 - 只在点云完全对齐时有效  索引匹配
+        // 点数不同：对每个原始点，在语义点云中找最近邻   KDTree最近邻搜索
+        // int semanticSize = semanticCloudIn->points.size();
+        // if (semanticSize == 0) {
+        //     if (requireSemanticCloud) {
+        //         RCLCPP_WARN_THROTTLE(
+        //             get_logger(), *get_clock(), 2000,
+        //             "Semantic cloud is required but the synced semantic cloud is empty.");
+        //         return false;
+        //     }
+        //     return true;
+        // }
 
-        if (semanticSize == cloudSize)
+        // if (semanticSize == cloudSize)  // 索引匹配  假设LiDAR[i]与Semantic[i]是一一对应的
+        // {
+        //     int matchedCount = 0;
+        //     for (int i = 0; i < cloudSize; ++i) {
+        //         const auto& lidarPoint = laserCloudIn->points[i];
+        //         const auto& semanticPoint = semanticCloudIn->points[i];
+        //         const float dx = lidarPoint.x - semanticPoint.x;
+        //         const float dy = lidarPoint.y - semanticPoint.y;
+        //         const float dz = lidarPoint.z - semanticPoint.z;
+        //         const float sqDist = dx * dx + dy * dy + dz * dz;
+        //         if (std::isfinite(sqDist) && sqDist <= semanticNearestSqDist) {  // semanticNearestSqDist = 0.05f * 0.05f; 即距离<5cm才认为索引匹配成功
+        //             const uint32_t label = semanticPoint.label;
+        //             pointSemanticLabels[i] = label;
+        //             pointSemanticWeights[i] = computeSemanticWeight(
+        //                 static_cast<SemanticLabel>(label),
+        //                 semanticWeightAlpha);
+        //             ++matchedCount;
+        //         }
+        //     }
+
+        //     const float semanticCoverage =
+        //         cloudSize > 0 ? static_cast<float>(matchedCount) / static_cast<float>(cloudSize) : 0.0f;
+        //     if (semanticCoverage >= minimumSemanticCoverage) {
+        //         return true;
+        //     }
+
+        //     RCLCPP_WARN_THROTTLE(
+        //         get_logger(), *get_clock(), 2000,
+        //         "Indexed semantic cloud failed geometry coverage %.3f < %.3f. Falling back to nearest-neighbor labels.",
+        //         semanticCoverage, minimumSemanticCoverage);
+        //     pointSemanticLabels.assign(cloudSize, static_cast<uint32_t>(SemanticLabel::UNKNOWN));
+        //     pointSemanticWeights.assign(cloudSize, 1.0f);
+        // }
+
+        // if (semanticSize != cloudSize) {  // KDTree 最近邻搜索  情况1：点数不同
+        //     RCLCPP_WARN_THROTTLE(
+        //         get_logger(), *get_clock(), 2000,
+        //         "Semantic cloud size mismatch: lidar=%d semantic=%d. Falling back to nearest-neighbor labels.",
+        //         cloudSize, semanticSize);
+        // }
+        // // 建立过程
+        // pcl::PointCloud<PointType>::Ptr semanticSearchCloud(new pcl::PointCloud<PointType>());  // 首先建立一个搜索点云
+        // std::vector<int> semanticIndexMap;
+        // semanticSearchCloud->reserve(semanticSize);
+        // semanticIndexMap.reserve(semanticSize);
+        // for (int i = 0; i < semanticSize; ++i) {
+        //     const auto& semanticPoint = semanticCloudIn->points[i];
+        //     if (!std::isfinite(semanticPoint.x) ||
+        //         !std::isfinite(semanticPoint.y) ||
+        //         !std::isfinite(semanticPoint.z))  // 然后把所有语义点加入
+        //     {
+        //         continue;
+        //     }
+        //     PointType searchPoint;
+        //     searchPoint.x = semanticPoint.x;
+        //     searchPoint.y = semanticPoint.y;
+        //     searchPoint.z = semanticPoint.z;
+        //     searchPoint.intensity = semanticPoint.intensity;
+        //     semanticSearchCloud->push_back(searchPoint);
+        //     semanticIndexMap.push_back(i);
+        // }
+
+        // if (semanticSearchCloud->empty()) {
+        //     RCLCPP_WARN_THROTTLE(
+        //         get_logger(), *get_clock(), 2000,
+        //         "Semantic cloud has no finite points after filtering.");
+        //     return !requireSemanticCloud;
+        // }
+
+        // pcl::KdTreeFLANN<PointType> semanticTree;
+        // semanticTree.setInputCloud(semanticSearchCloud);  // 接着建立 KDTree
+        // std::vector<int> pointSearchInd(1);
+        // std::vector<float> pointSearchSqDis(1);
+        // int matchedCount = 0;
+
+        // // 查询过程
+        // for (int i = 0; i < cloudSize; ++i) {
+        //     PointType query;
+        //     query.x = laserCloudIn->points[i].x;
+        //     query.y = laserCloudIn->points[i].y;
+        //     query.z = laserCloudIn->points[i].z;
+        //     query.intensity = laserCloudIn->points[i].intensity;
+
+        //     if (semanticTree.nearestKSearch(query, 1, pointSearchInd, pointSearchSqDis) > 0 &&  // K = 1表示寻找最近的一个语义点
+        //         pointSearchSqDis[0] <= semanticNearestSqDist)
+        //     {
+        //         const int semanticIndex = semanticIndexMap[pointSearchInd[0]];
+        //         const uint32_t label = semanticCloudIn->points[semanticIndex].label;
+        //         pointSemanticLabels[i] = label;
+        //         pointSemanticWeights[i] = computeSemanticWeight(
+        //             static_cast<SemanticLabel>(label),
+        //             semanticWeightAlpha);
+        //         ++matchedCount;
+        //     }
+        // }
+
+        // const float semanticCoverage =
+        //     cloudSize > 0 ? static_cast<float>(matchedCount) / static_cast<float>(cloudSize) : 0.0f;
+        // if (semanticCoverage < minimumSemanticCoverage) {  // KDTree 最近邻搜索 情况2：虽然点数相同，但是索引匹配成功率太低
+        //     RCLCPP_WARN_THROTTLE(
+        //         get_logger(), *get_clock(), 2000,
+        //         "Semantic coverage %.3f is below required %.3f; dropping lidar frame.",
+        //         semanticCoverage, minimumSemanticCoverage);
+        //     return !requireSemanticCloud;
+        // }
+        // return true;
+    
+        // 直接全部使用KDTree最近邻搜索
+        //============================
+        // Build KDTree
+        //============================
+        const int semanticSize = static_cast<int>(semanticCloudIn->points.size());
+
+        if (semanticSize != cloudSize)
         {
-            int matchedCount = 0;
-            for (int i = 0; i < cloudSize; ++i) {
-                const auto& lidarPoint = laserCloudIn->points[i];
-                const auto& semanticPoint = semanticCloudIn->points[i];
-                const float dx = lidarPoint.x - semanticPoint.x;
-                const float dy = lidarPoint.y - semanticPoint.y;
-                const float dz = lidarPoint.z - semanticPoint.z;
-                const float sqDist = dx * dx + dy * dy + dz * dz;
-                if (std::isfinite(sqDist) && sqDist <= semanticNearestSqDist) {
-                    const uint32_t label = semanticPoint.label;
-                    pointSemanticLabels[i] = label;
-                    pointSemanticWeights[i] = computeSemanticWeight(
-                        static_cast<SemanticLabel>(label),
-                        semanticWeightAlpha);
-                    ++matchedCount;
-                }
-            }
-
-            const float semanticCoverage =
-                cloudSize > 0 ? static_cast<float>(matchedCount) / static_cast<float>(cloudSize) : 0.0f;
-            if (semanticCoverage >= minimumSemanticCoverage) {
-                return true;
-            }
-
             RCLCPP_WARN_THROTTLE(
                 get_logger(), *get_clock(), 2000,
-                "Indexed semantic cloud failed geometry coverage %.3f < %.3f. Falling back to nearest-neighbor labels.",
-                semanticCoverage, minimumSemanticCoverage);
-            pointSemanticLabels.assign(cloudSize, static_cast<uint32_t>(SemanticLabel::UNKNOWN));
-            pointSemanticWeights.assign(cloudSize, 1.0f);
-        }
-
-        if (semanticSize != cloudSize) {
-            RCLCPP_WARN_THROTTLE(
-                get_logger(), *get_clock(), 2000,
-                "Semantic cloud size mismatch: lidar=%d semantic=%d. Falling back to nearest-neighbor labels.",
+                "Indexed semantic cloud size mismatch: lidar=%d semantic=%d",
                 cloudSize, semanticSize);
-        }
-
-        pcl::PointCloud<PointType>::Ptr semanticSearchCloud(new pcl::PointCloud<PointType>());
-        std::vector<int> semanticIndexMap;
-        semanticSearchCloud->reserve(semanticSize);
-        semanticIndexMap.reserve(semanticSize);
-        for (int i = 0; i < semanticSize; ++i) {
-            const auto& semanticPoint = semanticCloudIn->points[i];
-            if (!std::isfinite(semanticPoint.x) ||
-                !std::isfinite(semanticPoint.y) ||
-                !std::isfinite(semanticPoint.z))
-            {
-                continue;
-            }
-            PointType searchPoint;
-            searchPoint.x = semanticPoint.x;
-            searchPoint.y = semanticPoint.y;
-            searchPoint.z = semanticPoint.z;
-            searchPoint.intensity = semanticPoint.intensity;
-            semanticSearchCloud->push_back(searchPoint);
-            semanticIndexMap.push_back(i);
-        }
-
-        if (semanticSearchCloud->empty()) {
-            RCLCPP_WARN_THROTTLE(
-                get_logger(), *get_clock(), 2000,
-                "Semantic cloud has no finite points after filtering.");
             return !requireSemanticCloud;
         }
 
+        if (semanticSize == 0)
+        {
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 2000,
+                "Semantic cloud is empty.");
+
+            return !requireSemanticCloud;
+        }
+
+        // 构建KDTree搜索点云
+        int indexedMatchedCount = 0;
+        for (int i = 0; i < cloudSize; ++i)
+        {
+            const auto& lidarPoint = laserCloudIn->points[i];
+            const auto& semanticPoint = semanticCloudIn->points[i];
+            const float dx = lidarPoint.x - semanticPoint.x;
+            const float dy = lidarPoint.y - semanticPoint.y;
+            const float dz = lidarPoint.z - semanticPoint.z;
+            const float sqDist = dx * dx + dy * dy + dz * dz;
+            if (!std::isfinite(sqDist) || sqDist > semanticNearestSqDist)
+                continue;
+
+            const uint32_t label = semanticPoint.label;
+            pointSemanticLabels[i] = label;
+            pointSemanticWeights[i] = computeSemanticWeight(
+                static_cast<SemanticLabel>(label), semanticWeightAlpha);
+            ++indexedMatchedCount;
+        }
+
+        const float indexedCoverage = cloudSize > 0
+            ? static_cast<float>(indexedMatchedCount) / static_cast<float>(cloudSize)
+            : 0.0f;
+        RCLCPP_INFO_THROTTLE(
+            get_logger(), *get_clock(), 3000,
+            "Indexed semantic coverage: %.2f%% (%d/%d)",
+            indexedCoverage * 100.0f, indexedMatchedCount, cloudSize);
+
+        if (indexedCoverage < minimumSemanticCoverage)
+        {
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 2000,
+                "Indexed semantic geometry coverage %.3f is below threshold %.3f",
+                indexedCoverage, minimumSemanticCoverage);
+            pointSemanticLabels.assign(
+                cloudSize, static_cast<uint32_t>(SemanticLabel::UNKNOWN));
+            pointSemanticWeights.assign(cloudSize, 1.0f);
+            return !requireSemanticCloud;
+        }
+
+        return true;
+
+#if 0
+        pcl::PointCloud<PointType>::Ptr semanticSearchCloud(
+            new pcl::PointCloud<PointType>());
+
+        std::vector<int> semanticIndexMap;
+
+        semanticSearchCloud->reserve(semanticSize);
+        semanticIndexMap.reserve(semanticSize);
+
+        for (int i = 0; i < semanticSize; ++i)
+        {
+            const auto& p = semanticCloudIn->points[i];
+
+            if (!std::isfinite(p.x) ||
+                !std::isfinite(p.y) ||
+                !std::isfinite(p.z))
+                continue;
+
+            PointType pt;
+            pt.x = p.x;
+            pt.y = p.y;
+            pt.z = p.z;
+            pt.intensity = p.intensity;
+
+            semanticSearchCloud->push_back(pt);
+            semanticIndexMap.push_back(i);
+        }
+
+        if (semanticSearchCloud->empty())
+        {
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 2000,
+                "No valid semantic points.");
+
+            return !requireSemanticCloud;
+        }
+
+        //============================
+        // KDTree
+        //============================
         pcl::KdTreeFLANN<PointType> semanticTree;
         semanticTree.setInputCloud(semanticSearchCloud);
-        std::vector<int> pointSearchInd(1);
-        std::vector<float> pointSearchSqDis(1);
+
+        std::vector<int> searchIdx(1);
+        std::vector<float> searchDist(1);
+
         int matchedCount = 0;
 
-        for (int i = 0; i < cloudSize; ++i) {
+        // 对每一个LiDAR点寻找最近语义点
+        for (int i = 0; i < cloudSize; ++i)
+        {
             PointType query;
             query.x = laserCloudIn->points[i].x;
             query.y = laserCloudIn->points[i].y;
             query.z = laserCloudIn->points[i].z;
             query.intensity = laserCloudIn->points[i].intensity;
 
-            if (semanticTree.nearestKSearch(query, 1, pointSearchInd, pointSearchSqDis) > 0 &&
-                pointSearchSqDis[0] <= semanticNearestSqDist)
+            if (semanticTree.nearestKSearch(query, 1, searchIdx, searchDist) > 0)
             {
-                const int semanticIndex = semanticIndexMap[pointSearchInd[0]];
-                const uint32_t label = semanticCloudIn->points[semanticIndex].label;
-                pointSemanticLabels[i] = label;
-                pointSemanticWeights[i] = computeSemanticWeight(
-                    static_cast<SemanticLabel>(label),
-                    semanticWeightAlpha);
-                ++matchedCount;
+                if (searchDist[0] <= semanticNearestSqDist)
+                {
+                    int semanticIdx = semanticIndexMap[searchIdx[0]];
+
+                    uint32_t label = semanticCloudIn->points[semanticIdx].label;
+
+                    pointSemanticLabels[i] = label;
+
+                    pointSemanticWeights[i] =
+                        computeSemanticWeight(
+                            static_cast<SemanticLabel>(label),
+                            semanticWeightAlpha);
+
+                    matchedCount++;
+                }
             }
         }
 
-        const float semanticCoverage =
-            cloudSize > 0 ? static_cast<float>(matchedCount) / static_cast<float>(cloudSize) : 0.0f;
-        if (semanticCoverage < minimumSemanticCoverage) {
+        //============================
+        // Coverage Check
+        //============================
+        float semanticCoverage =
+            cloudSize > 0 ?
+            static_cast<float>(matchedCount) /
+            static_cast<float>(cloudSize)
+            : 0.0f;
+
+        RCLCPP_INFO_THROTTLE(
+            get_logger(),
+            *get_clock(),
+            3000,
+            "Semantic Coverage: %.2f%% (%d/%d)",
+            semanticCoverage * 100.0f,
+            matchedCount,
+            cloudSize);
+
+        if (semanticCoverage < minimumSemanticCoverage)
+        {
             RCLCPP_WARN_THROTTLE(
-                get_logger(), *get_clock(), 2000,
-                "Semantic coverage %.3f is below required %.3f; dropping lidar frame.",
-                semanticCoverage, minimumSemanticCoverage);
+                get_logger(),
+                *get_clock(),
+                2000,
+                "Semantic coverage %.3f is below threshold %.3f",
+                semanticCoverage,
+                minimumSemanticCoverage);
+
             return !requireSemanticCloud;
         }
+
         return true;
+#endif
+    
     }
 
     void cloudHandler(const sensor_msgs::msg::PointCloud2::SharedPtr laserCloudMsg)
