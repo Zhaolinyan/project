@@ -130,3 +130,47 @@ def test_validate_inference_metadata_accepts_matching_profile(tmp_path):
         json.dumps(metadata), encoding='utf-8')
 
     assert REPLAY.validate_inference_metadata(str(tmp_path)) == metadata
+
+
+def test_replay_entrypoint_has_unix_shebang():
+    entrypoint = ROOT / "semantic_bridge" / "semantic_replay_node.py"
+    contents = entrypoint.read_bytes()
+
+    assert contents.startswith(b"#!/usr/bin/env python3\n")
+    assert b"\r\n" not in contents
+
+
+def test_point_cloud_pipeline_uses_deep_queues():
+    utility = (ROOT / "include" / "dsw_lio_sam" / "utility.hpp").read_text(
+        encoding="utf-8")
+    replay = (ROOT / "semantic_bridge" / "semantic_replay_node.py").read_text(
+        encoding="utf-8")
+
+    assert "kPointCloudQosDepth = 1024" in utility
+    assert "POINT_CLOUD_QOS_DEPTH = 1024" in replay
+    assert replay.count("ReliabilityPolicy.RELIABLE") >= 2
+    assert "self.input_queue.append(msg)" in replay
+    assert "target=self.process_input_queue" in replay
+    assert "if self.input_queue or self.worker_busy" in replay
+
+    bag_qos = (ROOT / "config" / "rosbag_qos.yaml").read_text(encoding="utf-8")
+    assert "/os1_cloud_node/points:" in bag_qos
+    assert "reliability: reliable" in bag_qos
+    assert "depth: 1024" in bag_qos
+
+
+def test_parallel_optimization_flags_are_byte_addressable():
+    source = (ROOT / "src" / "mapOptimization.cpp").read_text(encoding="utf-8")
+
+    assert "std::vector<bool> laserCloudOriCornerFlag" not in source
+    assert "std::vector<bool> laserCloudOriSurfFlag" not in source
+    assert "std::vector<uint8_t> laserCloudOriCornerFlag" in source
+    assert "std::vector<uint8_t> laserCloudOriSurfFlag" in source
+
+
+def test_image_projection_requires_one_millisecond_semantic_match():
+    source = (ROOT / "src" / "imageProjection.cpp").read_text(encoding="utf-8")
+
+    assert "semanticTimeToleranceNs = 1000000LL" in source
+    assert "findPointCloudByTimestamp(" in source
+    assert "semanticCv.wait_until" in source

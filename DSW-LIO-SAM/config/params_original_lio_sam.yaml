@@ -1,0 +1,103 @@
+/**:
+  # LIO-SAM 适配Newer College数据集 ROS2参数配置
+  # 关键配置：原始算法路径、PCL 质心体素滤波、二值退化标志；无语义，alpha=0，关闭回环
+  ros__parameters:
+
+    # Topics  输入话题
+    pointCloudTopic: "/os1_cloud_node/points"  # 输入激光雷达点云  对应：imageProjection.cpp
+    imuTopic: "/os1_cloud_node/imu"            # 输入IMU数据      对应：imageProjection.cpp  用于：去畸变、姿态预测、IMU预积分
+
+    # Frames  坐标系
+    lidarFrame: "lidar_link"    # 激光坐标系
+    baselinkFrame: "base_link"  # 机器人中心
+    odometryFrame: "odom"       # 局部连续轨迹
+    mapFrame: "map"             # 全局地图
+
+    # GPS Settings  GPS设置  Newer College一般不用GPS
+    useImuHeadingInitialization: false
+    useGpsElevation: false
+    gpsCovThreshold: 2.0
+    poseCovThreshold: 25.0
+
+    # Sensor Settings  传感器设置
+    sensor: ouster         # Cylinder3D使用ouster
+    N_SCAN: 64             # 扫描线数
+    Horizon_SCAN: 1024     # 水平分辨率  Ouster：64线、1024水平点
+    downsampleRate: 1      # 点云降采样  1表示不丢点
+    lidarMinRange: 1.0     # 激光距离小于1m删除
+    lidarMaxRange: 1000.0  # 激光距离大于1000m删除
+
+    # IMU Settings  IMU参数  用于GTSAM
+    imuAccNoise: 2.0e-2    # Ouster IMU加速度计噪声较大
+    imuGyrNoise: 1.0e-3    # 陀螺仪噪声
+    imuAccBiasN: 6.4356659353532566e-05   # 来自Newer College数据集标定值
+    imuGyrBiasN: 3.5640318696367613e-05   # 来自Newer College数据集标定值
+
+    imuGravity: 9.80511
+    imuRPYWeight: 0.01
+
+    # 外参
+    # Newer College OS_I -> OS_L extrinsic: T_LI = T_SL^-1 * T_SI.
+    # Translation is expressed in the LiDAR frame, in metres.
+    extrinsicTrans:  [ -0.006253,  0.011775, -0.028535 ]  # 平移  [0,0,0]表示IMU和LiDAR没有偏移
+    extrinsicRot:    [ -1.0,  0.0,  0.0,
+                       0.0, -1.0,  0.0,
+                       0.0,  0.0,  1.0 ]  # 旋转  表示LiDAR坐标系转换IMU坐标系
+    extrinsicRPY:    [ -1.0,  0.0,  0.0,
+                       0.0, -1.0,  0.0,
+                       0.0,  0.0,  1.0 ]
+
+    # LOAM feature threshold  LOAM特征参数
+    edgeThreshold: 1.0  # 边缘阈值  控制角点
+    surfThreshold: 0.1  # 平面阈值  控制面点
+    edgeFeatureMinValidNum: 10   # 最少特征数量   角点不足10  放弃
+    surfFeatureMinValidNum: 100  #               面点不足100 放弃
+
+    # Voxel filter params  voxel滤波
+    odometrySurfLeafSize: 0.4   # 里程计  越小精度越高但计算越慢
+    mappingCornerLeafSize: 0.2  # 地图角点
+    mappingSurfLeafSize: 0.4    # 地图面点
+
+    # Robot motion constraint  # 运动约束
+    z_tollerance: 1000.0
+    rotation_tollerance: 1000.0
+
+    # CPU Params  CPU参数
+    numberOfCores: 4              # GTSAM优化线程
+    mappingProcessInterval: 0.15  # 地图优化频率 约6.6Hz
+
+    # Surrounding map  关键帧选择
+    surroundingkeyframeAddingDistThreshold: 1.0   # 距离 移动1m添加关键帧
+    surroundingkeyframeAddingAngleThreshold: 0.2  # 角度 约11.5°
+    surroundingKeyframeDensity: 2.0               # 下采样环境关键帧位姿
+    surroundingKeyframeSearchRadius: 50.0         # Scan-to-map搜索范围 当前帧寻找50m范围关键帧
+
+    # Loop closure  回环检测
+    loopClosureEnableFlag: false         # 关闭回环检测
+    loopClosureFrequency: 1.0            # 每秒检测一次
+    surroundingKeyframeSize: 50          # 子图大小
+    historyKeyframeSearchRadius: 15.0    # 搜索15m范围找历史
+    historyKeyframeSearchTimeDiff: 30.0  # 比当前时间晚30秒的关键帧
+    historyKeyframeSearchNum: 25         # 25个历史关键帧将被融合成一帧
+    historyKeyframeFitnessScore: 0.3     # ICP阈值越小，对齐效果越好
+
+    # Visualization  地图显示
+    globalMapVisualizationSearchRadius: 1000.0  # 全局地图可视化半径       Rviz显示1000m范围
+    globalMapVisualizationPoseDensity: 10.0     # 全局地图可视化关键帧密度 Rviz每10秒显示一个关键帧
+    globalMapVisualizationLeafSize: 1.0         # 全局地图可视化云密度     Rviz点云密度1m
+
+    # ===== DSW-LIO-SAM: 原始LIO-SAM实验参数 =====
+    originalLioSamMode: true                # 原始LIO-SAM实验
+    semanticCloudTopic: "/semantic_cloud"   # 语义点云话题名
+    degeneracyThreshold: 0.3                # false不订阅语义话题
+    requireSemanticCloud: false             # false不订阅语义话题
+    minimumSemanticCoverage: 0.0
+    pseudoGroundMaxZ: -0.5
+    pseudoStructureMinZ: 2.0
+    pseudoCanopyMinZ: 2.0
+
+    savePCD: true                           # 保存PCD结果
+    savePCDDirectory: "/dsw_lio_sam_results/original_lio_sam_rooster_001/"  # 保存路径
+
+    semanticEnabled: false                  # false表示不启用语义增强
+    semanticWeightAlpha: 0.0                # 权重系数α（0=等同原始LIO-SAM）

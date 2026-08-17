@@ -1,5 +1,5 @@
 /**:
-# ros2修改版！！！
+# 原始LIO-SAM配置  ROS2修改版
   ros__parameters:
 
     # Topics
@@ -40,13 +40,15 @@
     imuGravity: 9.80511
     imuRPYWeight: 0.01
 
-    extrinsicTrans:  [ 0.0,  0.0,  0.0 ]
-    extrinsicRot:    [ 1.0,  0.0,  0.0,
-                      0.0,  1.0,  0.0,
-                      0.0,  0.0,  1.0 ]
-    extrinsicRPY:    [ 1.0,  0.0,  0.0,
-                      0.0,  1.0,  0.0,
-                      0.0,  0.0,  1.0 ]
+    # Newer College OS_I -> OS_L extrinsic: T_LI = T_SL^-1 * T_SI.
+    # Translation is expressed in the LiDAR frame, in metres.
+    extrinsicTrans:  [ -0.006253,  0.011775, -0.028535 ]
+    extrinsicRot:    [ -1.0,  0.0,  0.0,
+                       0.0, -1.0,  0.0,
+                       0.0,  0.0,  1.0 ]
+    extrinsicRPY:    [ -1.0,  0.0,  0.0,
+                       0.0, -1.0,  0.0,
+                       0.0,  0.0,  1.0 ]
 
 
     # LOAM feature threshold
@@ -101,6 +103,6 @@
     requireSemanticCloud: false
     minimumSemanticCoverage: 0.0
     pseudoGroundMaxZ: -0.5
-    pseudoStructureMinZ: 2.0
+    pseudoStructureMinZ: 0.5
     pseudoCanopyMinZ: 2.0
     # ===== DSW-LIO-SAM 结束 =====

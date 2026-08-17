@@ -10,7 +10,10 @@ from rosbags.rosbag1 import Reader as Rosbag1Reader
 from rosbags.typesys import Stores, get_typestore
 
 
-DEFAULT_BAG_PATH = "/mnt/e/Code_reproduction/DSW-LIO-SAM/datasets/rooster_2020-07-10-09-19-26_2-001_ros2"
+if os.name == "nt":
+    DEFAULT_BAG_PATH = r"E:\Code_reproduction\Datasets\Newer College\datasets\rooster_2020-07-10-09-19-26_2-001_ros2"
+else:
+    DEFAULT_BAG_PATH = "/mnt/e/Code_reproduction/Datasets/Newer College/datasets/rooster_2020-07-10-09-19-26_2-001_ros2"
 DEFAULT_TOPIC = "/os1_cloud_node/points"
 DEFAULT_OUTPUT_DIR = "/home/zly/Cylinder3D/demo_data"
 DEFAULT_MAX_FRAMES = 5

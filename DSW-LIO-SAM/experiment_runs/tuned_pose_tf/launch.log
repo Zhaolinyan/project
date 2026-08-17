@@ -1,0 +1,53 @@
+[INFO] [launch]: All log files can be found below /home/zly/.ros/log/2026-08-05-18-50-44-738570-LAPTOP-LAHD0B48-402
+[INFO] [launch]: Default logging verbosity is set to INFO
+urdf_file_name : /home/zly/ros2_ws/install/dsw_lio_sam/share/dsw_lio_sam/config/robot.urdf.xacro
+[INFO] [static_transform_publisher-1]: process started with pid [419]
+[INFO] [robot_state_publisher-2]: process started with pid [421]
+[INFO] [dsw_lio_sam_imuPreintegration-3]: process started with pid [423]
+[INFO] [dsw_lio_sam_imageProjection-4]: process started with pid [425]
+[INFO] [dsw_lio_sam_featureExtraction-5]: process started with pid [427]
+[INFO] [dsw_lio_sam_mapOptimization-6]: process started with pid [429]
+[static_transform_publisher-1] [WARN] [1785927044.962564797] []: Old-style arguments are deprecated; see --help for new-style arguments
+[static_transform_publisher-1] [INFO] [1785927045.000931177] [static_transform_publisher_Q3HdauuxCRJCEETb]: Spinning until stopped - publishing transform
+[static_transform_publisher-1] translation: ('0.000000', '0.000000', '0.000000')
+[static_transform_publisher-1] rotation: ('0.000000', '0.000000', '0.000000', '1.000000')
+[static_transform_publisher-1] from 'map' to 'odom'
+[dsw_lio_sam_featureExtraction-5] [INFO] [1785927045.003856111] [rclcpp]: [1;32m----> Feature Extraction Started.[0m
+[dsw_lio_sam_imuPreintegration-3] [WARN] [1785927045.004093185] [rcl.logging_rosout]: Publisher already registered for provided node name. If this is due to multiple nodes with the same name then all logs for that logger name will go out over the existing publisher. As soon as any node with that name is destructed it will unregister the publisher, preventing any further logs for that name from being published on the rosout topic.
+[robot_state_publisher-2] [INFO] [1785927045.006211048] [robot_state_publisher]: got segment base_link
+[robot_state_publisher-2] [INFO] [1785927045.006341156] [robot_state_publisher]: got segment chassis_link
+[robot_state_publisher-2] [INFO] [1785927045.006353576] [robot_state_publisher]: got segment imu_link
+[robot_state_publisher-2] [INFO] [1785927045.006358512] [robot_state_publisher]: got segment laser_sensor_frame
+[robot_state_publisher-2] [INFO] [1785927045.006363383] [robot_state_publisher]: got segment lidar_link
+[robot_state_publisher-2] [INFO] [1785927045.006367904] [robot_state_publisher]: got segment navsat_link
+[dsw_lio_sam_imageProjection-4] [INFO] [1785927045.010282111] [rclcpp]: [1;32m----> Image Projection Started.[0m
+[dsw_lio_sam_imuPreintegration-3] [INFO] [1785927045.020838662] [rclcpp]: [1;32m----> IMU Preintegration Started.[0m
+[dsw_lio_sam_mapOptimization-6] [INFO] [1785927045.089984513] [rclcpp]: [1;32m----> Map Optimization Started.[0m
+[dsw_lio_sam_imuPreintegration-3] [WARN] [1785927051.544661846] [tf2_buffer]: Detected jump back in time. Clearing TF buffer.
+[dsw_lio_sam_imuPreintegration-3] [WARN] [1785927052.843170727] [dsw_lio_sam_imuPreintegration]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imageProjection-4] [WARN] [1785927052.843171277] [dsw_lio_sam_imageProjection]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imageProjection-4] [WARN] [1785927052.884785705] [dsw_lio_sam_imageProjection]: Waiting for IMU: earliest IMU (1594369166.441) is AFTER scan start (1594369166.427). Diff=0.014s
+[dsw_lio_sam_imageProjection-4] [WARN] [1785927062.855119259] [dsw_lio_sam_imageProjection]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imuPreintegration-3] [WARN] [1785927062.855119274] [dsw_lio_sam_imuPreintegration]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imageProjection-4] [WARN] [1785927072.877223774] [dsw_lio_sam_imageProjection]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imuPreintegration-3] [WARN] [1785927072.877223977] [dsw_lio_sam_imuPreintegration]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imageProjection-4] [WARN] [1785927082.877904466] [dsw_lio_sam_imageProjection]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imuPreintegration-3] [WARN] [1785927082.877935885] [dsw_lio_sam_imuPreintegration]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imageProjection-4] [WARN] [1785927092.879235354] [dsw_lio_sam_imageProjection]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imuPreintegration-3] [WARN] [1785927092.879273927] [dsw_lio_sam_imuPreintegration]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imuPreintegration-3] [WARN] [1785927102.920099440] [dsw_lio_sam_imuPreintegration]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imageProjection-4] [WARN] [1785927102.920156114] [dsw_lio_sam_imageProjection]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imageProjection-4] [WARN] [1785927112.940545077] [dsw_lio_sam_imageProjection]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imuPreintegration-3] [WARN] [1785927112.940601923] [dsw_lio_sam_imuPreintegration]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imageProjection-4] [WARN] [1785927122.941749973] [dsw_lio_sam_imageProjection]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imuPreintegration-3] [WARN] [1785927122.941776890] [dsw_lio_sam_imuPreintegration]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imageProjection-4] [WARN] [1785927132.963062669] [dsw_lio_sam_imageProjection]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imuPreintegration-3] [WARN] [1785927132.963153419] [dsw_lio_sam_imuPreintegration]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imageProjection-4] [WARN] [1785927142.984160615] [dsw_lio_sam_imageProjection]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imuPreintegration-3] [WARN] [1785927142.984177959] [dsw_lio_sam_imuPreintegration]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imageProjection-4] [WARN] [1785927152.985368905] [dsw_lio_sam_imageProjection]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imuPreintegration-3] [WARN] [1785927152.985384955] [dsw_lio_sam_imuPreintegration]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imuPreintegration-3] [WARN] [1785927162.986595180] [dsw_lio_sam_imuPreintegration]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imageProjection-4] [WARN] [1785927162.986585957] [dsw_lio_sam_imageProjection]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imageProjection-4] [WARN] [1785927172.987545389] [dsw_lio_sam_imageProjection]: IMU orientation not available (6-axis IMU), using identity quaternion.
+[dsw_lio_sam_imuPreintegration-3] [WARN] [1785927172.987563688] [dsw_lio_sam_imuPreintegration]: IMU orientation not available (6-axis IMU), using identity quaternion.

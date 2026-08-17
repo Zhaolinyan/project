@@ -1,0 +1,25 @@
+[INFO] [launch]: All log files can be found below /home/zly/.ros/log/2026-08-05-18-42-41-453679-LAPTOP-LAHD0B48-400
+[INFO] [launch]: Default logging verbosity is set to INFO
+urdf_file_name : /home/zly/ros2_ws/install/dsw_lio_sam/share/dsw_lio_sam/config/robot.urdf.xacro
+[INFO] [static_transform_publisher-1]: process started with pid [420]
+[INFO] [robot_state_publisher-2]: process started with pid [422]
+[INFO] [dsw_lio_sam_imuPreintegration-3]: process started with pid [424]
+[INFO] [dsw_lio_sam_imageProjection-4]: process started with pid [426]
+[INFO] [dsw_lio_sam_featureExtraction-5]: process started with pid [428]
+[INFO] [dsw_lio_sam_mapOptimization-6]: process started with pid [430]
+[static_transform_publisher-1] [WARN] [1785926561.680180193] []: Old-style arguments are deprecated; see --help for new-style arguments
+[static_transform_publisher-1] [INFO] [1785926561.718159591] [static_transform_publisher_jMaizzgys3y4TSW7]: Spinning until stopped - publishing transform
+[static_transform_publisher-1] translation: ('0.000000', '0.000000', '0.000000')
+[static_transform_publisher-1] rotation: ('0.000000', '0.000000', '0.000000', '1.000000')
+[static_transform_publisher-1] from 'map' to 'odom'
+[dsw_lio_sam_featureExtraction-5] [INFO] [1785926561.721491333] [rclcpp]: [1;32m----> Feature Extraction Started.[0m
+[dsw_lio_sam_imuPreintegration-3] [WARN] [1785926561.721746062] [rcl.logging_rosout]: Publisher already registered for provided node name. If this is due to multiple nodes with the same name then all logs for that logger name will go out over the existing publisher. As soon as any node with that name is destructed it will unregister the publisher, preventing any further logs for that name from being published on the rosout topic.
+[robot_state_publisher-2] [INFO] [1785926561.724361575] [robot_state_publisher]: got segment base_link
+[robot_state_publisher-2] [INFO] [1785926561.724466729] [robot_state_publisher]: got segment chassis_link
+[robot_state_publisher-2] [INFO] [1785926561.724474140] [robot_state_publisher]: got segment imu_link
+[robot_state_publisher-2] [INFO] [1785926561.724477104] [robot_state_publisher]: got segment laser_sensor_frame
+[robot_state_publisher-2] [INFO] [1785926561.724479635] [robot_state_publisher]: got segment lidar_link
+[robot_state_publisher-2] [INFO] [1785926561.724482046] [robot_state_publisher]: got segment navsat_link
+[dsw_lio_sam_imageProjection-4] [INFO] [1785926561.727838385] [rclcpp]: [1;32m----> Image Projection Started.[0m
+[dsw_lio_sam_imuPreintegration-3] [INFO] [1785926561.736064267] [rclcpp]: [1;32m----> IMU Preintegration Started.[0m
+[dsw_lio_sam_mapOptimization-6] [INFO] [1785926561.813112116] [rclcpp]: [1;32m----> Map Optimization Started.[0m

@@ -35,6 +35,11 @@ def generate_launch_description():
         default_value='false',
         description='Start the built-in geometry-rule pseudo semantic bridge if true')
 
+    start_rviz_declare = DeclareLaunchArgument(
+        'start_rviz',
+        default_value='true',
+        description='Start RViz when true')
+
     print("urdf_file_name : {}".format(xacro_path))
 
     return LaunchDescription([
@@ -42,6 +47,7 @@ def generate_launch_description():
         use_sim_time_declare,
         semantic_enabled_declare,
         start_pseudo_semantic_bridge_declare,
+        start_rviz_declare,
 
         Node(
             package='tf2_ros',
@@ -110,7 +116,8 @@ def generate_launch_description():
             name='rviz2',
             arguments=['-d', rviz_config_file],
             parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
-            output='screen'
+            output='screen',
+            condition=IfCondition(LaunchConfiguration('start_rviz'))
         )
 
     ])

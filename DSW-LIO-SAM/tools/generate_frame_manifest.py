@@ -3,6 +3,7 @@
 
 import argparse
 import csv
+import os
 import sqlite3
 import struct
 from pathlib import Path
@@ -80,13 +81,17 @@ def generate_manifest(bag_path, bins_path, topic):
 
 
 def main():
-    root = Path(__file__).resolve().parents[1]
+    dataset_root = (
+        Path(r'E:\Code_reproduction\Datasets\Newer College\datasets')
+        if os.name == 'nt'
+        else Path('/mnt/e/Code_reproduction/Datasets/Newer College/datasets')
+    )
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         'bag', nargs='?',
-        default=root / 'datasets' / 'rooster_2020-07-10-09-19-26_2-001_ros2')
+        default=dataset_root / 'rooster_2020-07-10-09-19-26_2-001_ros2')
     parser.add_argument(
-        'bins', nargs='?', default=root / 'datasets' / 'rooster_bin_001')
+        'bins', nargs='?', default=dataset_root / 'rooster_bin_001')
     parser.add_argument('--topic', default='/os1_cloud_node/points')
     args = parser.parse_args()
     output, rows = generate_manifest(args.bag, args.bins, args.topic)
