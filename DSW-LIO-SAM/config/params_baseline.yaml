@@ -1,31 +1,31 @@
 /**:
-# ros2修改版！！！
+# ros2修改版  DSW-LIO-SAM无语义消融基线
+# 关键配置：使用 DSW 路径，但关闭语义；alpha=0，关闭回环
   ros__parameters:
 
-    # Topics
-    pointCloudTopic: "/os1_cloud_node/points"   # Newer College的Ouster点云topic
-    imuTopic: "/os1_cloud_node/imu"             # Newer College的Ouster IMU topic
+    # Topics  输入话题
+    pointCloudTopic: "/os1_cloud_node/points"  # 输入激光雷达点云  对应：imageProjection.cpp
+    imuTopic: "/os1_cloud_node/imu"            # 输入IMU数据      对应：imageProjection.cpp  用于：去畸变、姿态预测、IMU预积分
 
-    # Frames
-    lidarFrame: "lidar_link"
-    baselinkFrame: "base_link"
-    odometryFrame: "odom"
-    mapFrame: "map"
+    # Frames  坐标系
+    lidarFrame: "lidar_link"    # 激光坐标系
+    baselinkFrame: "base_link"  # 机器人中心
+    odometryFrame: "odom"       # 局部连续轨迹
+    mapFrame: "map"             # 全局地图
 
-    # GPS Settings
-    useImuHeadingInitialization: false           # if using GPS data, set to "true"
-    useGpsElevation: false                       # if GPS elevation is bad, set to "false"
-    gpsCovThreshold: 2.0                         # m^2, threshold for using GPS data
-    poseCovThreshold: 25.0                       # m^2, threshold for using GPS data
+    # GPS Settings  GPS设置  Newer College一般不用GPS
+    useImuHeadingInitialization: false
+    useGpsElevation: false
+    gpsCovThreshold: 2.0
+    poseCovThreshold: 25.0
 
-    # Sensor Settings
-    sensor: ouster                               # lidar sensor type, either 'velodyne', 'ouster' or 'livox'
-    N_SCAN: 64                                   # number of lidar channels (i.e., Velodyne/Ouster: 16, 32, 64, 128, Livox Horizon: 6)
-    Horizon_SCAN: 1024                            # lidar horizontal resolution (Velodyne:1800, Ouster:512,1024,2048, Livox Horizon: 4000)
-    downsampleRate: 1                            # default: 1. Downsample your data if too many
-    # points. i.e., 16 = 64 / 4, 16 = 16 / 1
-    lidarMinRange: 1.0                           # default: 1.0, minimum lidar range to be used
-    lidarMaxRange: 1000.0                        # default: 1000.0, maximum lidar range to be used
+    # Sensor Settings  传感器设置
+    sensor: ouster         # Cylinder3D使用ouster
+    N_SCAN: 64             # 扫描线数
+    Horizon_SCAN: 1024     # 水平分辨率  Ouster：64线、1024水平点
+    downsampleRate: 1      # 点云降采样  1表示不丢点
+    lidarMinRange: 1.0     # 激光距离小于1m删除
+    lidarMaxRange: 1000.0  # 激光距离大于1000m删除
 
     # IMU Settings
     imuAccNoise: 2.0e-2    # Ouster IMU加速度计噪声较大
@@ -36,71 +36,68 @@
     imuGravity: 9.80511
     imuRPYWeight: 0.01
 
-    extrinsicTrans:  [ 0.0,  0.0,  0.0 ]
-    extrinsicRot:    [ 1.0,  0.0,  0.0,
-                      0.0,  1.0,  0.0,
-                      0.0,  0.0,  1.0 ]
-    extrinsicRPY:    [ 1.0,  0.0,  0.0,
-                      0.0,  1.0,  0.0,
-                      0.0,  0.0,  1.0 ]
+    # 外参
+    # Newer College OS_I -> OS_L extrinsic: T_LI = T_SL^-1 * T_SI.
+    # Translation is expressed in the LiDAR frame, in metres.
+    extrinsicTrans:  [ -0.006253,  0.011775, -0.028535 ]  # 平移  [0,0,0]表示IMU和LiDAR没有偏移
+    extrinsicRot:    [ -1.0,  0.0,  0.0,
+                       0.0, -1.0,  0.0,
+                       0.0,  0.0,  1.0 ]  # 旋转  表示LiDAR坐标系转换IMU坐标系
+    extrinsicRPY:    [ -1.0,  0.0,  0.0,
+                       0.0, -1.0,  0.0,
+                       0.0,  0.0,  1.0 ]
 
+    # LOAM feature threshold  LOAM特征参数
+    edgeThreshold: 1.0  # 边缘阈值  控制角点
+    surfThreshold: 0.1  # 平面阈值  控制面点
+    edgeFeatureMinValidNum: 10   # 最少特征数量   角点不足10  放弃
+    surfFeatureMinValidNum: 100  #               面点不足100 放弃
 
-    # LOAM feature threshold
-    edgeThreshold: 1.0
-    surfThreshold: 0.1
-    edgeFeatureMinValidNum: 10
-    surfFeatureMinValidNum: 100
+    # Voxel filter params  voxel滤波
+    odometrySurfLeafSize: 0.4   # 里程计  越小精度越高但计算越慢
+    mappingCornerLeafSize: 0.2  # 地图角点
+    mappingSurfLeafSize: 0.4    # 地图面点
 
-    # voxel filter paprams
-    odometrySurfLeafSize: 0.4                     # default: 0.4 - outdoor, 0.2 - indoor
-    mappingCornerLeafSize: 0.2                    # default: 0.2 - outdoor, 0.1 - indoor
-    mappingSurfLeafSize: 0.4                      # default: 0.4 - outdoor, 0.2 - indoor
+    # Robot motion constraint  # 运动约束
+    z_tollerance: 1000.0
+    rotation_tollerance: 1000.0
 
-    # robot motion constraint (in case you are using a 2D robot)
-    z_tollerance: 1000.0                          # meters
-    rotation_tollerance: 1000.0                   # radians
+    # CPU Params  CPU参数
+    numberOfCores: 4              # GTSAM优化线程
+    mappingProcessInterval: 0.15  # 地图优化频率 约6.6Hz
 
-    # CPU Params
-    numberOfCores: 4                              # number of cores for mapping optimization
-    mappingProcessInterval: 0.15                  # seconds, regulate mapping frequency
+    # Surrounding map  关键帧选择
+    surroundingkeyframeAddingDistThreshold: 1.0   # 距离 移动1m添加关键帧
+    surroundingkeyframeAddingAngleThreshold: 0.2  # 角度 约11.5°
+    surroundingKeyframeDensity: 2.0               # 下采样环境关键帧位姿
+    surroundingKeyframeSearchRadius: 50.0         # Scan-to-map搜索范围 当前帧寻找50m范围关键帧
 
-    # Surrounding map
-    surroundingkeyframeAddingDistThreshold: 1.0   # meters, regulate keyframe adding threshold
-    surroundingkeyframeAddingAngleThreshold: 0.2  # radians, regulate keyframe adding threshold
-    surroundingKeyframeDensity: 2.0               # meters, downsample surrounding keyframe poses   
-    surroundingKeyframeSearchRadius: 50.0         # meters, within n meters scan-to-map optimization
-    # (when loop closure disabled)
+    # Loop closure  回环检测
+    loopClosureEnableFlag: false         # 关闭回环检测
+    loopClosureFrequency: 1.0            # 每秒检测一次
+    surroundingKeyframeSize: 50          # 子图大小
+    historyKeyframeSearchRadius: 15.0    # 搜索15m范围找历史
+    historyKeyframeSearchTimeDiff: 30.0  # 比当前时间晚30秒的关键帧
+    historyKeyframeSearchNum: 25         # 25个历史关键帧将被融合成一帧
+    historyKeyframeFitnessScore: 0.3     # ICP阈值越小，对齐效果越好
 
-    # Loop closure
-    loopClosureEnableFlag: false
-    loopClosureFrequency: 1.0                     # Hz, regulate loop closure constraint add frequency
-    surroundingKeyframeSize: 50                   # submap size (when loop closure enabled)
-    historyKeyframeSearchRadius: 15.0             # meters, key frame that is within n meters from
-    # current pose will be considerd for loop closure
-    historyKeyframeSearchTimeDiff: 30.0           # seconds, key frame that is n seconds older will be
-    # considered for loop closure
-    historyKeyframeSearchNum: 25                  # number of hostory key frames will be fused into a
-    # submap for loop closure
-    historyKeyframeFitnessScore: 0.3              # icp threshold, the smaller the better alignment
-
-    # Visualization
-    globalMapVisualizationSearchRadius: 1000.0    # meters, global map visualization radius
-    globalMapVisualizationPoseDensity: 10.0       # meters, global map visualization keyframe density
-    globalMapVisualizationLeafSize: 1.0           # meters, global map visualization cloud density
-
-
-    # Export settings
-    savePCD: true                                   # 保存PCD结果
-    savePCDDirectory: "/dsw_lio_sam_results/baseline_no_semantic_rooster_001/"  # 保存路径
+    # Visualization  地图显示
+    globalMapVisualizationSearchRadius: 1000.0  # 全局地图可视化半径       Rviz显示1000m范围
+    globalMapVisualizationPoseDensity: 10.0     # 全局地图可视化关键帧密度 Rviz每10秒显示一个关键帧
+    globalMapVisualizationLeafSize: 1.0         # 全局地图可视化云密度     Rviz点云密度1m
 
     # ===== DSW-LIO-SAM: 基线实验参数 =====
-    semanticCloudTopic: "/semantic_cloud"           # 语义点云话题名
-    degeneracyThreshold: 0.3                        # 退化检测阈值
-    requireSemanticCloud: false
+    originalLioSamMode: false               # DSW语义消融实验  非原始 LIO-SAM
+    semanticCloudTopic: "/semantic_cloud"   # 语义点云话题名
+    degeneracyThreshold: 0.3                # false不订阅语义话题
+    requireSemanticCloud: false             # false不订阅语义话题
     minimumSemanticCoverage: 0.0
     pseudoGroundMaxZ: -0.5
     pseudoStructureMinZ: 2.0
     pseudoCanopyMinZ: 2.0
-    semanticEnabled: false                          # 设为 true 启用语义增强
-    semanticWeightAlpha: 0.0                        # 权重系数 α（0=等同原始LIO-SAM）
-    # ===== DSW-LIO-SAM 基线实验结束 =====
+
+    savePCD: true                                   # 保存PCD结果
+    savePCDDirectory: "/dsw_lio_sam_results/baseline_no_semantic_rooster_001/"  # 保存路径
+    
+    semanticEnabled: false                          # false表示不启用语义增强  featureExtraction不读取label、mapOptimization不计算语义权重
+    semanticWeightAlpha: 0.0                        # 权重系数α=0等同于原始LIO-SAM  即所有点权重=1

@@ -17,11 +17,11 @@ import numpy as np
 _IS_WINDOWS = platform.system() == "Windows"
 
 if _IS_WINDOWS:
-    BAG_DIR = r"E:\Code_reproduction\DSW-LIO-SAM\datasets\rooster_2020-07-10-09-19-26_2-001_ros2"
-    OUTPUT_DIR = r"E:\Code_reproduction\DSW-LIO-SAM\datasets\nc_bin_test"
+    BAG_DIR = r"E:\Code_reproduction\Datasets\Newer College\datasets\rooster_2020-07-10-09-19-26_2-001_ros2"
+    OUTPUT_DIR = r"E:\Code_reproduction\Datasets\Newer College\datasets\nc_bin_test"
 else:
-    BAG_DIR = "/mnt/e/Code_reproduction/DSW-LIO-SAM/datasets/rooster_2020-07-10-09-19-26_2-001_ros2"
-    OUTPUT_DIR = "/mnt/e/Code_reproduction/DSW-LIO-SAM/datasets/rooster_bin_001"
+    BAG_DIR = "/mnt/e/Code_reproduction/Datasets/Newer College/datasets/rooster_2020-07-10-09-19-26_2-001_ros2"
+    OUTPUT_DIR = "/mnt/e/Code_reproduction/Datasets/Newer College/datasets/rooster_bin_001"
 
 if len(sys.argv) > 1:
     BAG_DIR = sys.argv[1]

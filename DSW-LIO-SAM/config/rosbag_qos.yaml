@@ -1,0 +1,5 @@
+/os1_cloud_node/points:
+  reliability: reliable
+  durability: volatile
+  history: keep_last
+  depth: 1024

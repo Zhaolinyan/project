@@ -1,3 +1,4 @@
+// 头文件
 #pragma once
 #ifndef _UTILITY_LIDAR_ODOMETRY_H_
 #define _UTILITY_LIDAR_ODOMETRY_H_
@@ -57,59 +58,127 @@
 #include <array>
 #include <thread>
 #include <mutex>
+#include <optional>
+#include <stdexcept>
+#include <map>
 #include <unordered_map>
 
 using namespace std;
 
+// 语义类别表
 // ===== DSW-LIO-SAM: 语义标签定义 =====
 enum class SemanticLabel {
     UNKNOWN  = 0,   // 未知
-    CAR      = 1,   // 汽车（动态）
-    TRUCK    = 2,   // 卡车（动态）
+    CAR      = 1,   // 汽车  （动态）
+    TRUCK    = 2,   // 卡车  （动态）
     BUS      = 3,   // 公交车（动态）
-    PERSON   = 4,   // 行人（动态）
+    PERSON   = 4,   // 行人  （动态）
     BICYCLE  = 5,   // 自行车（动态）
     MOTORCYCLE = 6, // 摩托车（动态）
     BUILDING = 7,   // 建筑物（静态）
-    ROAD     = 8,   // 路面（静态）
+    ROAD     = 8,   // 路面  （静态）
     SIDEWALK = 9,   // 人行道（静态）
-    TERRAIN  = 10,  // 地面（静态）
-    TREE     = 11,  // 树木（半静态）
-    POLE     = 12,  // 杆子（静态）
-    FENCE    = 13,  // 围栏（静态）
-    WALL     = 14   // 墙壁（静态）
+    TERRAIN  = 10,  // 地面  （静态）
+    TREE     = 11,  // 树木  （半静态）
+    POLE     = 12,  // 杆子  （静态）
+    FENCE    = 13,  // 围栏  （静态）
+    WALL     = 14   // 墙壁  （静态）
 };
 
+// 语义权重表
 // 语义稳定性得分 S(c) ∈ [0, 1]
 // 0 = 完全动态（不可靠），1 = 完全静态（最可靠）
 inline float semanticStabilityScore(SemanticLabel label) {
     switch (label) {
-        case SemanticLabel::CAR:        return 0.1f;
-        case SemanticLabel::TRUCK:      return 0.1f;
-        case SemanticLabel::BUS:        return 0.1f;
-        case SemanticLabel::PERSON:     return 0.05f;
-        case SemanticLabel::BICYCLE:    return 0.1f;
-        case SemanticLabel::MOTORCYCLE: return 0.1f;
-        case SemanticLabel::BUILDING:   return 1.0f;
-        case SemanticLabel::ROAD:       return 0.95f;
-        case SemanticLabel::SIDEWALK:   return 0.9f;
-        case SemanticLabel::TERRAIN:    return 0.9f;
-        case SemanticLabel::TREE:       return 0.6f;
-        case SemanticLabel::POLE:       return 0.95f;
-        case SemanticLabel::FENCE:      return 0.9f;
-        case SemanticLabel::WALL:       return 1.0f;
-        default:                        return 0.5f; // UNKNOWN
+        case SemanticLabel::CAR:        return 0.1f;         // 汽车  （动态）
+        case SemanticLabel::TRUCK:      return 0.1f;         // 卡车  （动态）
+        case SemanticLabel::BUS:        return 0.1f;         // 公交车（动态）
+        case SemanticLabel::PERSON:     return 0.05f;        // 行人  （动态）
+        case SemanticLabel::BICYCLE:    return 0.1f;         // 自行车（动态）
+        case SemanticLabel::MOTORCYCLE: return 0.1f;         // 摩托车（动态）
+        case SemanticLabel::BUILDING:   return 1.0f;         // 建筑物（静态）
+        case SemanticLabel::ROAD:       return 0.95f;        // 路面  （静态）
+        case SemanticLabel::SIDEWALK:   return 0.9f;         // 人行道（静态）
+        case SemanticLabel::TERRAIN:    return 0.9f;         // 地面  （静态）
+        case SemanticLabel::TREE:       return 0.6f;         // 树木  （半静态）
+        case SemanticLabel::POLE:       return 0.95f;        // 杆子  （静态）
+        case SemanticLabel::FENCE:      return 0.9f;         // 围栏  （静态）
+        case SemanticLabel::WALL:       return 1.0f;         // 墙壁  （静态）
+        default:                        return 0.5f;         // UNKNOWN
     }
 }
 
-// 语义权重计算: w_i = 1 + α × (S(c_i) - 0.5)
-// α=0 时退化为原始 LIO-SAM（所有点权重=1）
+// 语义权重函数
+// 语义权重计算: w_i = 1 + α × (S(c_i) - 0.5)  稳定点权重大 动态点权重小
+// α=0时，所有点权重=1，退化为原始LIO-SAM
 inline float computeSemanticWeight(SemanticLabel label, float alpha = 0.0f) {
     float s = semanticStabilityScore(label);
     return std::max(0.05f, 1.0f + alpha * (s - 0.5f));
 }
 
-inline bool isDynamicSemanticLabel(SemanticLabel label) {
+inline bool isPlausibleOptimizationStep(
+    double translationMeters,
+    double rotationRadians,
+    double residualBefore,
+    double residualAfter,
+    double maxTranslationMeters,
+    double maxRotationRadians)
+{
+    return std::isfinite(translationMeters) &&
+           std::isfinite(rotationRadians) &&
+           std::isfinite(residualBefore) &&
+           std::isfinite(residualAfter) &&
+           translationMeters <= maxTranslationMeters &&
+           rotationRadians <= maxRotationRadians &&
+           residualAfter <= residualBefore + 1e-9;
+}
+
+inline bool isPlausibleLidarCorrection(
+    double deltaTimeSeconds,
+    double translationMeters,
+    double rotationRadians,
+    double minimumTranslationLimitMeters = 5.0,
+    double maximumSpeedMetersPerSecond = 20.0,
+    double maximumRotationRadians = 45.0 * M_PI / 180.0)
+{
+    const double translationLimit = std::max(
+        minimumTranslationLimitMeters,
+        maximumSpeedMetersPerSecond * std::max(deltaTimeSeconds, 0.0));
+    return deltaTimeSeconds > 0.0 &&
+           std::isfinite(translationMeters) &&
+           std::isfinite(rotationRadians) &&
+           translationMeters <= translationLimit &&
+           rotationRadians <= maximumRotationRadians;
+}
+
+inline SemanticLabel classifyPseudoSemanticPoint(
+    float z,
+    float normalizedIntensity,
+    float groundMaxZ,
+    float structureMinZ,
+    float canopyMinZ)
+{
+    if (!std::isfinite(z)) {
+        return SemanticLabel::UNKNOWN;
+    }
+
+    const float intensity = std::isfinite(normalizedIntensity)
+        ? std::clamp(normalizedIntensity, 0.0f, 1.0f)
+        : 0.0f;
+
+    if (z < groundMaxZ) {
+        return SemanticLabel::TERRAIN;
+    }
+    if (z > canopyMinZ) {
+        return SemanticLabel::TREE;
+    }
+    if (z > structureMinZ || intensity > 0.8f) {
+        return SemanticLabel::BUILDING;
+    }
+    return SemanticLabel::ROAD;
+}
+
+inline bool isDynamicSemanticLabel(SemanticLabel label) {  // 判断是不是动态物体
     return label == SemanticLabel::CAR ||
            label == SemanticLabel::TRUCK ||
            label == SemanticLabel::BUS ||
@@ -123,7 +192,7 @@ inline bool isDynamicSemanticLabel(SemanticLabel label) {
 typedef pcl::PointXYZI PointType;
 
 // ===== DSW-LIO-SAM: 带语义标签的点类型 =====
-struct PointXYZIL {
+struct PointXYZIL {  // x、y、z、intensity、label  L-语义信息
     PCL_ADD_POINT4D
     float intensity;
     uint32_t label;  // SemanticLabel 枚举值
@@ -145,6 +214,10 @@ struct SemanticVoxelKey {
 
     bool operator==(const SemanticVoxelKey& other) const {
         return x == other.x && y == other.y && z == other.z;
+    }
+
+    bool operator<(const SemanticVoxelKey& other) const {
+        return std::tie(x, y, z) < std::tie(other.x, other.y, other.z);
     }
 };
 
@@ -171,20 +244,132 @@ inline void voxelDownsampleSemanticCloud(
         return;
     }
 
-    std::unordered_map<SemanticVoxelKey, PointTypeL, SemanticVoxelKeyHash> voxels;
-    voxels.reserve(input->size());
+    struct VoxelAccumulator {
+        double x = 0.0;
+        double y = 0.0;
+        double z = 0.0;
+        double intensity = 0.0;
+        std::size_t count = 0;
+        std::array<std::size_t, 15> labelCounts{};
+    };
+
+    std::map<SemanticVoxelKey, VoxelAccumulator> voxels;
     for (const auto& point : input->points) {
         const SemanticVoxelKey key{
             static_cast<int>(std::floor(point.x / leafSize)),
             static_cast<int>(std::floor(point.y / leafSize)),
             static_cast<int>(std::floor(point.z / leafSize))};
-        voxels.emplace(key, point);
+        auto& voxel = voxels[key];
+        voxel.x += point.x;
+        voxel.y += point.y;
+        voxel.z += point.z;
+        voxel.intensity += point.intensity;
+        ++voxel.count;
+        const auto label = static_cast<std::size_t>(point.label);
+        if (label < voxel.labelCounts.size()) {
+            ++voxel.labelCounts[label];
+        } else {
+            ++voxel.labelCounts[static_cast<std::size_t>(SemanticLabel::UNKNOWN)];
+        }
     }
 
     output.reserve(voxels.size());
     for (const auto& item : voxels) {
-        output.push_back(item.second);
+        const auto& voxel = item.second;
+        PointTypeL point{};
+        const double inverseCount = 1.0 / static_cast<double>(voxel.count);
+        point.x = static_cast<float>(voxel.x * inverseCount);
+        point.y = static_cast<float>(voxel.y * inverseCount);
+        point.z = static_cast<float>(voxel.z * inverseCount);
+        point.intensity = static_cast<float>(voxel.intensity * inverseCount);
+        point.label = static_cast<uint32_t>(std::distance(
+            voxel.labelCounts.begin(),
+            std::max_element(voxel.labelCounts.begin(), voxel.labelCounts.end())));
+        output.push_back(point);
     }
+}
+
+inline void voxelDownsampleOriginalLioSamCloud(
+    const pcl::PointCloud<PointTypeL>::ConstPtr& input,
+    pcl::PointCloud<PointTypeL>& output,
+    float leafSize)
+{
+    output.clear();
+    if (!input || input->empty()) {
+        return;
+    }
+    if (leafSize <= 0.0f) {
+        output = *input;
+        for (auto& point : output.points) {
+            point.label = static_cast<uint32_t>(SemanticLabel::UNKNOWN);
+        }
+        return;
+    }
+
+    pcl::PointCloud<PointType>::Ptr originalInput(new pcl::PointCloud<PointType>());
+    originalInput->reserve(input->size());
+    originalInput->header = input->header;
+    originalInput->is_dense = input->is_dense;
+    for (const auto& point : input->points) {
+        PointType originalPoint;
+        originalPoint.x = point.x;
+        originalPoint.y = point.y;
+        originalPoint.z = point.z;
+        originalPoint.intensity = point.intensity;
+        originalInput->push_back(originalPoint);
+    }
+
+    pcl::VoxelGrid<PointType> filter;
+    filter.setLeafSize(leafSize, leafSize, leafSize);
+    filter.setInputCloud(originalInput);
+    pcl::PointCloud<PointType> filtered;
+    filter.filter(filtered);
+
+    output.reserve(filtered.size());
+    output.header = filtered.header;
+    output.is_dense = filtered.is_dense;
+    for (const auto& point : filtered.points) {
+        PointTypeL outputPoint;
+        outputPoint.x = point.x;
+        outputPoint.y = point.y;
+        outputPoint.z = point.z;
+        outputPoint.intensity = point.intensity;
+        outputPoint.label = static_cast<uint32_t>(SemanticLabel::UNKNOWN);
+        output.push_back(outputPoint);
+    }
+}
+
+inline void voxelDownsampleExperimentCloud(
+    const pcl::PointCloud<PointTypeL>::ConstPtr& input,
+    pcl::PointCloud<PointTypeL>& output,
+    float leafSize,
+    bool originalLioSamMode)
+{
+    if (originalLioSamMode) {
+        voxelDownsampleOriginalLioSamCloud(input, output, leafSize);
+    } else {
+        voxelDownsampleSemanticCloud(input, output, leafSize);
+    }
+}
+
+inline float packDegeneracyIndicator(
+    bool originalLioSamMode,
+    bool isDegenerate,
+    float degeneracyScore)
+{
+    return originalLioSamMode
+        ? (isDegenerate ? 1.0f : 0.0f)
+        : degeneracyScore;
+}
+
+inline bool isDegenerateFromIndicator(
+    bool originalLioSamMode,
+    float indicator,
+    float threshold)
+{
+    return originalLioSamMode
+        ? static_cast<int>(indicator) == 1
+        : indicator > threshold;
 }
 // ===== DSW-LIO-SAM 结束 =====
 
@@ -279,6 +464,7 @@ public:
     float globalMapVisualizationPoseDensity;
     float globalMapVisualizationLeafSize;
     // ===== DSW-LIO-SAM: 语义参数 =====
+    bool originalLioSamMode;            // 是否恢复原始 LIO-SAM 算法路径
     bool semanticEnabled;              // 是否启用语义增强
     string semanticCloudTopic;         // 语义点云话题名
     float semanticWeightAlpha;         // 权重公式中的 α 参数
@@ -446,7 +632,9 @@ public:
         get_parameter("globalMapVisualizationPoseDensity", globalMapVisualizationPoseDensity);
         declare_parameter("globalMapVisualizationLeafSize", 1.0);
         get_parameter("globalMapVisualizationLeafSize", globalMapVisualizationLeafSize);
-        // ===== DSW-LIO-SAM: 读取语义参数 =====
+        // ===== DSW-LIO-SAM: 读取实验与语义参数 =====
+        declare_parameter("originalLioSamMode", false);
+        get_parameter("originalLioSamMode", originalLioSamMode);
         declare_parameter("semanticEnabled", false);
         get_parameter("semanticEnabled", semanticEnabled);
         declare_parameter("semanticCloudTopic", "/semantic_cloud");
@@ -461,10 +649,17 @@ public:
         get_parameter("minimumSemanticCoverage", minimumSemanticCoverage);
         declare_parameter("pseudoGroundMaxZ", -0.5);
         get_parameter("pseudoGroundMaxZ", pseudoGroundMaxZ);
-        declare_parameter("pseudoStructureMinZ", 2.0);
+        declare_parameter("pseudoStructureMinZ", 0.5);
         get_parameter("pseudoStructureMinZ", pseudoStructureMinZ);
         declare_parameter("pseudoCanopyMinZ", 2.0);
         get_parameter("pseudoCanopyMinZ", pseudoCanopyMinZ);
+        if (originalLioSamMode &&
+            (semanticEnabled || semanticWeightAlpha != 0.0f || requireSemanticCloud))
+        {
+            throw std::invalid_argument(
+                "originalLioSamMode requires semanticEnabled=false, "
+                "semanticWeightAlpha=0, and requireSemanticCloud=false");
+        }
         // ===== DSW-LIO-SAM 结束 =====
     }
 
@@ -523,6 +718,34 @@ template<typename T>
 double stamp2Sec(const T& stamp)
 {
     return rclcpp::Time(stamp).seconds();
+}
+
+inline int64_t stampToNanoseconds(const builtin_interfaces::msg::Time& stamp)
+{
+    return static_cast<int64_t>(stamp.sec) * 1000000000LL +
+           static_cast<int64_t>(stamp.nanosec);
+}
+
+inline std::optional<size_t> findPointCloudByTimestamp(
+    const std::deque<sensor_msgs::msg::PointCloud2>& queue,
+    int64_t targetStampNs,
+    int64_t toleranceNs)
+{
+    std::optional<size_t> bestIndex;
+    int64_t bestDiffNs = std::numeric_limits<int64_t>::max();
+
+    for (size_t i = 0; i < queue.size(); ++i) {
+        const int64_t stampNs = stampToNanoseconds(queue[i].header.stamp);
+        const int64_t diffNs = stampNs >= targetStampNs
+            ? stampNs - targetStampNs
+            : targetStampNs - stampNs;
+        if (diffNs <= toleranceNs && diffNs < bestDiffNs) {
+            bestDiffNs = diffNs;
+            bestIndex = i;
+        }
+    }
+
+    return bestIndex;
 }
 
 
@@ -607,10 +830,12 @@ auto qos_imu = rclcpp::QoS(
     ),
     qos_profile_imu);
 
+inline constexpr size_t kPointCloudQosDepth = 1024;
+
 rmw_qos_profile_t qos_profile_lidar{
     RMW_QOS_POLICY_HISTORY_KEEP_LAST,
-    5,
-    RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT,
+    kPointCloudQosDepth,
+    RMW_QOS_POLICY_RELIABILITY_RELIABLE,
     RMW_QOS_POLICY_DURABILITY_VOLATILE,
     RMW_QOS_DEADLINE_DEFAULT,
     RMW_QOS_LIFESPAN_DEFAULT,
@@ -625,5 +850,24 @@ auto qos_lidar = rclcpp::QoS(
         qos_profile_lidar.depth
     ),
     qos_profile_lidar);
+
+rmw_qos_profile_t qos_profile_point_cloud_pipeline{
+    RMW_QOS_POLICY_HISTORY_KEEP_LAST,
+    kPointCloudQosDepth,
+    RMW_QOS_POLICY_RELIABILITY_RELIABLE,
+    RMW_QOS_POLICY_DURABILITY_VOLATILE,
+    RMW_QOS_DEADLINE_DEFAULT,
+    RMW_QOS_LIFESPAN_DEFAULT,
+    RMW_QOS_POLICY_LIVELINESS_SYSTEM_DEFAULT,
+    RMW_QOS_LIVELINESS_LEASE_DURATION_DEFAULT,
+    false
+};
+
+auto qos_point_cloud_pipeline = rclcpp::QoS(
+    rclcpp::QoSInitialization(
+        qos_profile_point_cloud_pipeline.history,
+        qos_profile_point_cloud_pipeline.depth
+    ),
+    qos_profile_point_cloud_pipeline);
 
 #endif

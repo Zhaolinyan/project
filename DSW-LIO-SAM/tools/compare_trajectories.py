@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 轨迹对比可视化脚本
-读取三组 trajectory.pcd 并绘制 3D 对比图
+读取四组 trajectory.pcd 并绘制 3D 对比图
 
 用法:
     python compare_trajectories.py
@@ -13,11 +13,12 @@ from mpl_toolkits.mplot3d import Axes3D
 import os
 
 # ========== 修改这里的路径 ==========
-# 三组实验的 trajectory.pcd 路径
+# 四组实验的 trajectory.pcd 路径
 TRAJ_PATHS = {
-    "Baseline (No Semantic)":     "/home/zly/dsw_lio_sam_results/baseline_no_semantic_rooster_001/trajectory.pcd",
-    "Pseudo-Semantic (alpha=2.0)": "/home/zly/dsw_lio_sam_results/pseudo_semantic_rooster_001/trajectory.pcd",
-    "Real-Semantic (Cylinder3D)": "/home/zly/dsw_lio_sam_results/cylinder3d_true_semantic_rooster_001/trajectory.pcd",
+    "Original LIO-SAM": "/home/zly/dsw_lio_sam_results/original_lio_sam_rooster_001/trajectory.pcd",
+    "DSW Ablation (No Semantic)": "/home/zly/dsw_lio_sam_results/baseline_no_semantic_rooster_001/trajectory.pcd",
+    "Pseudo-Semantic (alpha=0.5)": "/home/zly/dsw_lio_sam_results/pseudo_semantic_rooster_001/trajectory.pcd",
+    "Cylinder3D Semantic (alpha=0.5)": "/home/zly/dsw_lio_sam_results/cylinder3d_true_semantic_rooster_001/trajectory.pcd",
 }
 # ===================================
 
@@ -101,7 +102,7 @@ def plot_trajectories(trajectories):
 
     # ---- 子图1: 3D 轨迹 ----
     ax1 = fig.add_subplot(2, 2, 1, projection='3d')
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c']
+    colors = ['#1f77b4', '#7f7f7f', '#ff7f0e', '#2ca02c']
     for (name, pts), color in zip(trajectories.items(), colors):
         if pts is not None:
             ax1.plot(pts[:, 0], pts[:, 1], pts[:, 2],

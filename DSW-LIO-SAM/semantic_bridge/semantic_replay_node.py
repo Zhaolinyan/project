@@ -2,14 +2,26 @@
 """Replay precomputed semantic frames on /semantic_cloud."""
 
 import os
+import sys
+import threading
 import time
 from bisect import bisect_right
+from collections import deque
+from pathlib import Path
 
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import PointCloud2, PointField
+
+# With colcon's --symlink-install, the executable can resolve into build/ while
+# its installed helper remains beside the symlink in install/. Search both.
+_SCRIPT_DIRS = (Path(__file__).parent, Path(__file__).resolve().parent)
+for _script_dir in _SCRIPT_DIRS:
+    _script_dir = str(_script_dir)
+    if _script_dir not in sys.path:
+        sys.path.insert(0, _script_dir)
 
 from semantic_replay_utils import (
     SEMANTIC_DTYPE,
@@ -20,6 +32,8 @@ from semantic_replay_utils import (
     validate_inference_metadata,
 )
 
+POINT_CLOUD_QOS_DEPTH = 1024
+
 
 class SemanticReplayNode(Node):
     def __init__(self):
@@ -27,12 +41,14 @@ class SemanticReplayNode(Node):
 
         self.declare_parameter("semantic_dir", "")
         self.declare_parameter("input_topic", "/os1_cloud_node/points")
+        self.declare_parameter("output_topic", "semantic_cloud")
         self.declare_parameter("minimum_match_coverage", 0.95)
         self.declare_parameter("stamp_tolerance_sec", 0.001)
-        self.declare_parameter("republish_recent_count", 6)
+        self.declare_parameter("republish_recent_count", 0)
 
         semantic_dir = self.get_parameter("semantic_dir").get_parameter_value().string_value
         self.input_topic = self.get_parameter("input_topic").get_parameter_value().string_value
+        self.output_topic = self.get_parameter("output_topic").get_parameter_value().string_value
         self.minimum_match_coverage = (
             self.get_parameter("minimum_match_coverage").get_parameter_value().double_value
         )
@@ -68,6 +84,12 @@ class SemanticReplayNode(Node):
         self.unique_published_stamps = set()
         self.semantic_msg_cache = {}
         self.logged_first_input = False
+        self.replay_complete_logged = False
+        self.exit_code = 0
+        self.input_queue = deque()
+        self.queue_condition = threading.Condition()
+        self.worker_busy = False
+        self.stop_worker_event = threading.Event()
 
         model_kind = metadata.get("model_kind", "unknown")
         profile = metadata.get("preprocessing_profile", "unknown")
@@ -81,22 +103,28 @@ class SemanticReplayNode(Node):
 
         input_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
-            depth=10,
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            depth=POINT_CLOUD_QOS_DEPTH,
+            reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
         )
         self.sub = self.create_subscription(PointCloud2, self.input_topic, self.callback, input_qos)
         output_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
-            depth=200,
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            depth=POINT_CLOUD_QOS_DEPTH,
+            reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
         )
-        self.pub = self.create_publisher(PointCloud2, "/semantic_cloud", output_qos)
+        self.pub = self.create_publisher(PointCloud2, self.output_topic, output_qos)
 
         self.last_msg_time = self.get_clock().now()
         self.last_wall_msg_time = time.monotonic()
         self.shutdown_timer = self.create_timer(5.0, self.check_shutdown)
+        self.worker = threading.Thread(
+            target=self.process_input_queue,
+            name="semantic_replay_worker",
+            daemon=True,
+        )
+        self.worker.start()
 
     def callback(self, msg: PointCloud2):
         self.last_msg_time = self.get_clock().now()
@@ -106,6 +134,30 @@ class SemanticReplayNode(Node):
             self.get_logger().info(f"Received first lidar cloud on {self.input_topic}")
             self.logged_first_input = True
 
+        with self.queue_condition:
+            self.input_queue.append(msg)
+            self.queue_condition.notify()
+
+    def process_input_queue(self):
+        while not self.stop_worker_event.is_set():
+            with self.queue_condition:
+                while not self.input_queue and not self.stop_worker_event.is_set():
+                    self.queue_condition.wait()
+                if self.stop_worker_event.is_set():
+                    return
+                msg = self.input_queue.popleft()
+                self.worker_busy = True
+
+            try:
+                self.process_cloud(msg)
+            except Exception as exc:  # Keep one malformed frame from killing the worker silently.
+                self.get_logger().error(f"Unexpected semantic replay error: {exc}")
+            finally:
+                with self.queue_condition:
+                    self.worker_busy = False
+                    self.queue_condition.notify_all()
+
+    def process_cloud(self, msg: PointCloud2):
         stamp_ns = stamp_to_ns(msg.header.stamp)
         matched_stamp, entry = find_frame_for_stamp(
             self.frame_index, self.sorted_stamps, stamp_ns, self.stamp_tolerance_ns
@@ -165,6 +217,11 @@ class SemanticReplayNode(Node):
             if cached_msg is not None:
                 self.pub.publish(cached_msg)
 
+        oldest_kept_stamp = self.sorted_stamps[first_index]
+        for stamp in list(self.semantic_msg_cache):
+            if stamp < oldest_kept_stamp:
+                del self.semantic_msg_cache[stamp]
+
         if self.published_count % 100 == 0 or self.published_count == self.total_frames:
             diff_ms = abs(matched_stamp - stamp_ns) / 1_000_000.0
             self.get_logger().info(
@@ -173,20 +230,57 @@ class SemanticReplayNode(Node):
             )
 
     def check_shutdown(self):
-        if self.received_count == 0 or self.published_count < self.total_frames:
+        if self.replay_complete_logged or self.received_count == 0:
             return
         elapsed = time.monotonic() - self.last_wall_msg_time
-        if elapsed > 5.0:
+        if elapsed <= 5.0:
+            return
+
+        with self.queue_condition:
+            if self.input_queue or self.worker_busy:
+                return
+
+        if self.published_count == self.total_frames:
             self.get_logger().info(
-                f"Replay complete: published {self.published_count}/{self.total_frames} frames"
+                f"Replay complete: received {self.received_count}/{self.total_frames}, "
+                f"published {self.published_count}/{self.total_frames} frames; "
+                "waiting for experiment shutdown"
             )
-            raise SystemExit(0)
+            self.replay_complete_logged = True
+            return
+
+        self.get_logger().error(
+            f"Replay incomplete after input became idle: "
+            f"received {self.received_count}/{self.total_frames}, "
+            f"published {self.published_count}/{self.total_frames}. "
+            "Aborting the experiment instead of saving an incomplete result."
+        )
+        self.replay_complete_logged = True
+        self.exit_code = 1
+        rclpy.shutdown()
+
+    def stop_worker(self):
+        self.stop_worker_event.set()
+        with self.queue_condition:
+            self.queue_condition.notify_all()
+        self.worker.join()
 
 
 def main():
     rclpy.init()
-    rclpy.spin(SemanticReplayNode())
-    rclpy.shutdown()
+    node = SemanticReplayNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        exit_code = node.exit_code
+        node.stop_worker()
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+    if exit_code:
+        raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":

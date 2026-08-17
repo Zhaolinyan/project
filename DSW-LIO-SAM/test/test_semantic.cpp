@@ -91,6 +91,29 @@ TEST(SemanticLabels, DynamicClassificationIsCentralized)
     EXPECT_FALSE(isDynamicSemanticLabel(SemanticLabel::UNKNOWN));
 }
 
+TEST(PseudoSemanticClassification, UsesNormalizedIntensity)
+{
+    EXPECT_EQ(
+        classifyPseudoSemanticPoint(0.0f, 0.9f, -0.5f, 0.5f, 2.0f),
+        SemanticLabel::BUILDING);
+    EXPECT_EQ(
+        classifyPseudoSemanticPoint(0.0f, 0.6f, -0.5f, 0.5f, 2.0f),
+        SemanticLabel::ROAD);
+}
+
+TEST(PseudoSemanticClassification, HeightBandsAreReachable)
+{
+    EXPECT_EQ(
+        classifyPseudoSemanticPoint(-1.0f, 0.0f, -0.5f, 0.5f, 2.0f),
+        SemanticLabel::TERRAIN);
+    EXPECT_EQ(
+        classifyPseudoSemanticPoint(1.0f, 0.0f, -0.5f, 0.5f, 2.0f),
+        SemanticLabel::BUILDING);
+    EXPECT_EQ(
+        classifyPseudoSemanticPoint(3.0f, 0.0f, -0.5f, 0.5f, 2.0f),
+        SemanticLabel::TREE);
+}
+
 TEST(SemanticVoxelGrid, DoesNotInventAveragedLabelIds)
 {
     auto input = std::make_shared<pcl::PointCloud<PointTypeL>>();
@@ -110,6 +133,119 @@ TEST(SemanticVoxelGrid, DoesNotInventAveragedLabelIds)
     const uint32_t label = output.front().label;
     EXPECT_TRUE(label == static_cast<uint32_t>(SemanticLabel::CAR) ||
                 label == static_cast<uint32_t>(SemanticLabel::BUILDING));
+}
+
+TEST(SemanticVoxelGrid, UsesCentroidAndMajorityLabelDeterministically)
+{
+    auto input = std::make_shared<pcl::PointCloud<PointTypeL>>();
+    for (int i = 0; i < 3; ++i) {
+        PointTypeL point{};
+        point.x = 0.1f + 0.1f * i;
+        point.intensity = 1.0f + i;
+        point.label = static_cast<uint32_t>(
+            i == 0 ? SemanticLabel::CAR : SemanticLabel::BUILDING);
+        input->push_back(point);
+    }
+
+    pcl::PointCloud<PointTypeL> firstOutput;
+    pcl::PointCloud<PointTypeL> secondOutput;
+    voxelDownsampleSemanticCloud(input, firstOutput, 1.0f);
+    voxelDownsampleSemanticCloud(input, secondOutput, 1.0f);
+
+    ASSERT_EQ(firstOutput.size(), 1U);
+    ASSERT_EQ(secondOutput.size(), 1U);
+    EXPECT_NEAR(firstOutput.front().x, 0.2f, 1e-6f);
+    EXPECT_NEAR(firstOutput.front().intensity, 2.0f, 1e-6f);
+    EXPECT_EQ(
+        firstOutput.front().label,
+        static_cast<uint32_t>(SemanticLabel::BUILDING));
+    EXPECT_FLOAT_EQ(firstOutput.front().x, secondOutput.front().x);
+    EXPECT_EQ(firstOutput.front().label, secondOutput.front().label);
+}
+
+TEST(OptimizationGuard, RejectsLargeOrResidualIncreasingStep)
+{
+    EXPECT_TRUE(isPlausibleOptimizationStep(
+        0.2, 0.01, 10.0, 5.0, 2.0, 0.2));
+    EXPECT_FALSE(isPlausibleOptimizationStep(
+        2.1, 0.01, 10.0, 5.0, 2.0, 0.2));
+    EXPECT_FALSE(isPlausibleOptimizationStep(
+        0.2, 0.21, 10.0, 5.0, 2.0, 0.2));
+    EXPECT_FALSE(isPlausibleOptimizationStep(
+        0.2, 0.01, 10.0, 11.0, 2.0, 0.2));
+}
+
+TEST(LidarCorrectionGuard, RejectsTimeAndMotionDiscontinuities)
+{
+    EXPECT_TRUE(isPlausibleLidarCorrection(0.2, 1.0, 0.1));
+    EXPECT_FALSE(isPlausibleLidarCorrection(0.0, 0.0, 0.0));
+    EXPECT_FALSE(isPlausibleLidarCorrection(0.2, 6.0, 0.1));
+    EXPECT_FALSE(isPlausibleLidarCorrection(0.2, 1.0, M_PI));
+}
+
+TEST(ExperimentVoxelGrid, OriginalModeUsesPclCentroid)
+{
+    auto input = std::make_shared<pcl::PointCloud<PointTypeL>>();
+    PointTypeL first{};
+    first.x = 0.1f;
+    first.intensity = 1.0f;
+    first.label = static_cast<uint32_t>(SemanticLabel::CAR);
+    input->push_back(first);
+    PointTypeL second{};
+    second.x = 0.3f;
+    second.intensity = 3.0f;
+    second.label = static_cast<uint32_t>(SemanticLabel::BUILDING);
+    input->push_back(second);
+
+    pcl::PointCloud<PointTypeL> output;
+    voxelDownsampleExperimentCloud(input, output, 1.0f, true);
+
+    ASSERT_EQ(output.size(), 1U);
+    EXPECT_NEAR(output.front().x, 0.2f, 1e-6f);
+    EXPECT_NEAR(output.front().intensity, 2.0f, 1e-6f);
+    EXPECT_EQ(output.front().label, static_cast<uint32_t>(SemanticLabel::UNKNOWN));
+}
+
+TEST(DegeneracyIndicator, OriginalModeUsesBinaryContract)
+{
+    EXPECT_FLOAT_EQ(packDegeneracyIndicator(true, false, 0.8f), 0.0f);
+    EXPECT_FLOAT_EQ(packDegeneracyIndicator(true, true, 0.2f), 1.0f);
+    EXPECT_TRUE(isDegenerateFromIndicator(true, 1.0f, 0.3f));
+    EXPECT_FALSE(isDegenerateFromIndicator(true, 0.8f, 0.3f));
+}
+
+TEST(DegeneracyIndicator, DswModeUsesContinuousScore)
+{
+    EXPECT_FLOAT_EQ(packDegeneracyIndicator(false, true, 0.4f), 0.4f);
+    EXPECT_TRUE(isDegenerateFromIndicator(false, 0.4f, 0.3f));
+    EXPECT_FALSE(isDegenerateFromIndicator(false, 0.2f, 0.3f));
+}
+
+TEST(SemanticTimestampSync, RejectsAdjacentTenHertzFrame)
+{
+    std::deque<sensor_msgs::msg::PointCloud2> queue(1);
+    queue.front().header.stamp.sec = 10;
+    queue.front().header.stamp.nanosec = 100000000;
+
+    const int64_t targetStampNs = 10LL * 1000000000LL;
+    const auto match = findPointCloudByTimestamp(queue, targetStampNs, 1000000LL);
+
+    EXPECT_FALSE(match.has_value());
+}
+
+TEST(SemanticTimestampSync, AcceptsOnlyFrameWithinOneMillisecond)
+{
+    std::deque<sensor_msgs::msg::PointCloud2> queue(2);
+    queue[0].header.stamp.sec = 10;
+    queue[0].header.stamp.nanosec = 100000000;
+    queue[1].header.stamp.sec = 10;
+    queue[1].header.stamp.nanosec = 500000;
+
+    const int64_t targetStampNs = 10LL * 1000000000LL;
+    const auto match = findPointCloudByTimestamp(queue, targetStampNs, 1000000LL);
+
+    ASSERT_TRUE(match.has_value());
+    EXPECT_EQ(*match, 1U);
 }
 
 int main(int argc, char** argv)

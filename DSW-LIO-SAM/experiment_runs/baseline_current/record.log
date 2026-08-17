@@ -1,0 +1,11 @@
+stdin is not a terminal device. Keyboard handling disabled.[INFO] [1785926566.227327276] [rosbag2_recorder]: Press SPACE for pausing/resuming
+[INFO] [1785926566.257261839] [rosbag2_storage]: Opened database '/mnt/e/Code_reproduction/DSW-LIO-SAM/experiment_runs/baseline_current/odometry/odometry_0.db3' for READ_WRITE.
+[INFO] [1785926566.262086200] [rosbag2_recorder]: Listening for topics...
+[INFO] [1785926566.262102849] [rosbag2_recorder]: Event publisher thread: Starting
+[INFO] [1785926566.267372083] [rosbag2_recorder]: Subscribed to topic '/dsw_lio_sam/mapping/odometry_incremental'
+[INFO] [1785926566.271129314] [rosbag2_recorder]: Subscribed to topic '/dsw_lio_sam/mapping/odometry'
+[INFO] [1785926566.271487072] [rosbag2_recorder]: Recording...
+[INFO] [1785926566.271780189] [rosbag2_recorder]: All requested topics are subscribed. Stopping discovery...
+[INFO] [1785926571.367595874] [rosbag2_cpp]: Writing remaining messages from cache to the bag. It may take a while
+[INFO] [1785926571.539590085] [rosbag2_recorder]: Event publisher thread: Exiting
+[INFO] [1785926571.549103134] [rosbag2_recorder]: Recording stopped

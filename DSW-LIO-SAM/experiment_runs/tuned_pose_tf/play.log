@@ -1,0 +1,8 @@
+stdin is not a terminal device. Keyboard handling disabled.[INFO] [1785927051.460657259] [rosbag2_storage]: Opened database '/home/zly/nc_bags/rooster_2020-07-10-09-19-26_2-001_ros2/rooster_2020-07-10-09-19-26_2-001_ros2.db3' for READ_ONLY.
+[INFO] [1785927051.465511685] [rosbag2_player]: Set rate to 0.5
+[INFO] [1785927051.478505499] [rosbag2_player]: Adding keyboard callbacks.
+[INFO] [1785927051.491167387] [rosbag2_player]: Press SPACE for Pause/Resume
+[INFO] [1785927051.514620918] [rosbag2_player]: Press CURSOR_RIGHT for Play Next Message
+[INFO] [1785927051.520731896] [rosbag2_player]: Press CURSOR_UP for Increase Rate 10%
+[INFO] [1785927051.528437941] [rosbag2_player]: Press CURSOR_DOWN for Decrease Rate 10%
+[INFO] [1785927051.532489586] [rosbag2_storage]: Opened database '/home/zly/nc_bags/rooster_2020-07-10-09-19-26_2-001_ros2/rooster_2020-07-10-09-19-26_2-001_ros2.db3' for READ_ONLY.
