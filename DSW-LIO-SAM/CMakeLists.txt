@@ -72,13 +72,26 @@ install(PROGRAMS semantic_bridge/run_cylinder3d_node.sh
   DESTINATION lib/${PROJECT_NAME}
   RENAME run_cylinder3d_node
 )
-install(PROGRAMS semantic_bridge/semantic_replay_node.py
+set(SEMANTIC_REPLAY_NODE "${CMAKE_CURRENT_BINARY_DIR}/semantic_replay_node")
+configure_file(
+  semantic_bridge/semantic_replay_node.py
+  "${SEMANTIC_REPLAY_NODE}"
+  @ONLY
+  NEWLINE_STYLE UNIX
+)
+set(SEMANTIC_REPLAY_UTILS "${CMAKE_CURRENT_BINARY_DIR}/semantic_replay_utils.py")
+configure_file(
+  semantic_bridge/semantic_replay_utils.py
+  "${SEMANTIC_REPLAY_UTILS}"
+  @ONLY
+  NEWLINE_STYLE UNIX
+)
+install(PROGRAMS "${SEMANTIC_REPLAY_NODE}"
   DESTINATION lib/${PROJECT_NAME}
-  RENAME semantic_replay_node
 )
 install(FILES semantic_bridge/cylinder3d_ros_node.py
         semantic_bridge/cylinder3d_inference.py
-        semantic_bridge/semantic_replay_utils.py
+        "${SEMANTIC_REPLAY_UTILS}"
   DESTINATION lib/${PROJECT_NAME}
 )
 

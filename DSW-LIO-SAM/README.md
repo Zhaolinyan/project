@@ -1,6 +1,6 @@
 # LIO-SAM
 
-DSW-LIO-SAM 的 Newer College 三组对照实验入口、参数约束和结果解释见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)。
+DSW-LIO-SAM 的 Newer College 四组对照实验入口、参数约束和结果解释见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)。
 
 **A real-time lidar-inertial odometry package. We strongly recommend the users read this document thoroughly and test the package with the provided dataset first. A video of the demonstration of the method can be found on [YouTube](https://www.youtube.com/watch?v=A0H8CoORZJU).**
 
@@ -68,6 +68,12 @@ This branch was tested with Ouster lidars, Xsens IMUs and SBG-Systems IMUs using
 - [sbg_ros2_driver](https://github.com/SBG-Systems/sbg_ros2_driver)
 
 In these tests, the IMU was mounted on the bottom of the lidar such that their x-axes pointed in the same direction. The parameters `extrinsicRot` and `extrinsicRPY` in `params.yaml` correspond to this constellation.
+
+Newer College is a different hardware configuration: it uses the Ouster
+OS1's internal ICM-20948 IMU (`os_imu`) and the Ouster point-cloud frame
+(`os_lidar`). Use the Newer College calibration documented in
+`docs/EXPERIMENTS.md`; do not reuse the external Xsens/SBG mounting example
+above or assume an identity LiDAR-IMU transform.
 
 ## Dependencies
 
